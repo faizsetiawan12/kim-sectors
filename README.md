@@ -49,6 +49,32 @@ Exit codes: `0` success, `2` authentication failure (including a missing
 `SECTORS_API_KEY`), `3` malformed response schema, `4` request failure
 (timeout, rate limit, other HTTP errors), `1` unexpected error.
 
+### `sync-cache`
+
+Synchronize the LQ45 universe and reusable Sectors data cache. A command without
+`--fetch` is a dry-run preview: it reads existing cache files, reports missing
+coverage and the estimated market-data credits, and makes no network calls or
+filesystem writes. On a first run the universe is unresolved until `--fetch`
+resolves it.
+
+```bash
+python main.py sync-cache --start 2026-08-01 --end 2026-08-31
+python main.py sync-cache --start 2026-08-01 --end 2026-08-31 --fetch
+```
+
+The fetch operation stores validated daily bars and broker-summary days under
+`data/cache/`, including source, market symbol/date, retrieval timestamp, and
+schema version. It also stores effective-date LQ45 membership snapshots. Daily
+requests are limited to 90 days and broker-summary requests to 14 days; later
+runs reuse covered spans and request only missing dates. Use
+`--refresh-universe --fetch` to append a new membership snapshot.
+
+A first fetch reports one credit per resolved companies-screener page and one
+credit per daily or broker-summary request. Preview estimates are conditional
+when the universe has not yet been resolved. Existing API authentication and
+request/schema exit codes remain: `0` success, `2` authentication, `3` schema,
+`4` request failure, and `1` unexpected/cache failure.
+
 ## Planned commands
 
 ```bash

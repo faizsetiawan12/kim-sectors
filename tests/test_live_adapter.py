@@ -14,7 +14,7 @@ from kim_sectors.market_data import (
     build_authorization_headers,
 )
 
-from .support import daily_bars_payload
+from .support import daily_bars_payload, universe_screener_payload
 
 
 class FakeResponse:
@@ -101,3 +101,40 @@ def test_live_adapter_maps_non_json_body_to_schema_error():
 
     with pytest.raises(SectorsSchemaError, match="non-JSON"):
         adapter.fetch_daily_bars("BBCA", date(2026, 8, 26), date(2026, 8, 26))
+
+
+def test_live_adapter_fetches_paginated_universe_and_normalizes_symbols():
+    class PaginatedSession:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            offset = kwargs["params"]["offset"]
+            if offset == 0:
+                return FakeResponse(
+                    200,
+                    universe_screener_payload(
+                        ["bbca.jk", "TLKM"], has_next=True, next_offset=30
+                    ),
+                )
+            return FakeResponse(200, universe_screener_payload(["BBCA.JK"], has_next=False))
+
+    session = PaginatedSession()
+    symbols = SectorsHttpAdapter(config(), session=session).fetch_universe("lq45")
+
+    assert symbols.symbols == ["BBCA", "TLKM"]
+    assert symbols.pages == 2
+    assert session.calls[0][1]["params"] == {
+        "where": "indices in ['lq45']",
+        "limit": 30,
+        "offset": 0,
+    }
+
+
+def test_live_adapter_rejects_non_advancing_universe_pagination():
+    payload = universe_screener_payload(["BBCA"], has_next=True, next_offset=0)
+    adapter = SectorsHttpAdapter(config(), session=FakeSession(FakeResponse(200, payload)))
+
+    with pytest.raises(SectorsSchemaError, match="did not advance"):
+        adapter.fetch_universe("lq45")

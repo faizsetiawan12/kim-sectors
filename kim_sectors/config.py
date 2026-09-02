@@ -23,6 +23,7 @@ class SectorsConfig(BaseSettings):
     kim_sectors_timezone: str = "Asia/Jakarta"
     kim_sectors_cache_dir: Path = Path("data/cache")
     kim_sectors_output_dir: Path = Path("output/reports")
+    kim_sectors_universe_index: str = "lq45"
 
     @field_validator("sectors_api_key", mode="before")
     @classmethod

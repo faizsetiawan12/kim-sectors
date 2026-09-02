@@ -15,3 +15,7 @@ class SectorsSchemaError(MarketDataError):
 
 class SectorsRequestError(MarketDataError):
     """A Sectors request failed for a non-authentication reason."""
+
+
+class CacheError(MarketDataError):
+    """The local data cache is missing, corrupt, or cannot be written."""

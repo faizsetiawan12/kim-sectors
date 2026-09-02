@@ -64,3 +64,38 @@ def broker_summary_payload(symbol: str = "BBCA", *, start: date, end: date) -> d
 def malformed_daily_bars_payload() -> list[dict]:
     """A daily-bar body missing the required ``close`` field."""
     return [{"symbol": "BBCA", "date": "2026-08-26", "volume": 1}]
+
+
+def universe_screener_payload(
+    symbols: list[str], *, has_next: bool = False, next_offset: int | None = None
+) -> dict:
+    """Build one companies-screener page with permissive extra fields."""
+    return {
+        "results": [{"symbol": symbol, "company_name": "Example"} for symbol in symbols],
+        "pagination": {
+            "total_count": len(symbols),
+            "showing": len(symbols),
+            "limit": 30,
+            "offset": 0,
+            "has_next": has_next,
+            "has_previous": False,
+            "next_offset": next_offset,
+            "previous_offset": None,
+        },
+    }
+
+
+def universe_screener_page(
+    symbols: list[str], *, offset: int, has_next: bool = False, next_offset: int | None = None
+) -> dict:
+    """Build a page whose pagination offset matches the request."""
+    payload = universe_screener_payload(
+        symbols, has_next=has_next, next_offset=next_offset
+    )
+    payload["pagination"]["offset"] = offset
+    return payload
+
+
+def daily_bars_for_symbol(symbol: str, *, start: date, end: date) -> list[dict]:
+    """Build daily bars preserving the requested symbol."""
+    return daily_bars_payload(symbol, start=start, end=end)

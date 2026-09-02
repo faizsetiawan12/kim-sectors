@@ -12,14 +12,15 @@ from zoneinfo import ZoneInfo
 class JsonFormatter(logging.Formatter):
     """Format stage records as one JSON object per line."""
 
-    def __init__(self, timezone: ZoneInfo):
+    def __init__(self, timezone: ZoneInfo, *, event: str = "sector_ping_stage"):
         super().__init__()
         self.timezone = timezone
+        self.event = event
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
             "ts": datetime.now(self.timezone).isoformat(timespec="seconds"),
-            "event": "sector_ping_stage",
+            "event": self.event,
             "stage": getattr(record, "stage", "unknown"),
             "status": getattr(record, "status", "ok"),
         }
@@ -27,11 +28,17 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, sort_keys=True)
 
 
-def configure_logging(stream: IO[str], timezone: ZoneInfo) -> logging.Logger:
+def configure_logging(
+    stream: IO[str],
+    timezone: ZoneInfo,
+    *,
+    event: str = "sector_ping_stage",
+    name: str = "kim_sectors.ping",
+) -> logging.Logger:
     """Create an isolated logger that writes only structured lines."""
-    logger = logging.Logger("kim_sectors.ping")
+    logger = logging.Logger(name)
     handler = logging.StreamHandler(stream)
-    handler.setFormatter(JsonFormatter(timezone))
+    handler.setFormatter(JsonFormatter(timezone, event=event))
     logger.addHandler(handler)
     logger.propagate = False
     return logger
