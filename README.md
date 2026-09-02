@@ -29,6 +29,26 @@ cp .env.example .env
 
 The project requires Python 3.10+ and a Sectors API key. Telegram delivery is optional during local development and requires a bot token and destination chat/topic configuration.
 
+## Commands
+
+### `ping-sectors`
+
+Live tracer for the Sectors connection. It authenticates with the configured
+API key, fetches one LQ45 symbol's daily bars plus one broker-summary
+response, validates both schemas, and prints one JSON log line per stage
+(auth, fetch, validate, complete). Timestamps use `Asia/Jakarta`.
+
+```bash
+python main.py ping-sectors [--symbol BBCA] [--window-days 7]
+```
+
+Cost: 2 API credits per run (one per endpoint). Keep `--window-days` at 14 or
+below; the broker-summary endpoint rejects wider windows.
+
+Exit codes: `0` success, `2` authentication failure (including a missing
+`SECTORS_API_KEY`), `3` malformed response schema, `4` request failure
+(timeout, rate limit, other HTTP errors), `1` unexpected error.
+
 ## Planned commands
 
 ```bash

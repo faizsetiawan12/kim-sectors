@@ -11,6 +11,7 @@ KIM Sectors is KIM's automated IDX market-intelligence workflow for the Sectors 
 - **Daily market brief**: The post-market Markdown/JSON report sent to Telegram.
 - **Backtest run**: A point-in-time replay of the signal and portfolio rules over historical data.
 - **Pipeline**: The automated process that fetches, validates, scores, reports, and notifies.
+- **Sectors tracer**: A small live-data check that authenticates through a representative fetch, validates the response schema, and records structured stages.
 - **Data cache**: Local persisted Sectors responses reused by backtests and later runs to avoid repeated API calls.
 
 ## Boundaries
