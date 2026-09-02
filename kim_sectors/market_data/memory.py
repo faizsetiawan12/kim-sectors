@@ -3,18 +3,11 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Callable
+from typing import Any
 
 from .errors import MarketDataError
 from .models import BrokerSummary, DailyBar, UniverseResolution
 from .validate import parse_broker_summary, parse_daily_bars
-
-
-def _infer_credits(endpoint: str, payload: Any) -> int:
-    """Count credits the live adapter would have spent."""
-    if endpoint in ("universe",):
-        return 1
-    return 1
 
 
 class InMemorySectorsAdapter:

@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from ..observability import log_stage
 from .base import SectorsMarketData, SyncMarketData
-from .cache import load_universe_membership, read_cache, write_cache
+from .cache import load_universe_membership, missing_spans, read_cache, write_cache
 from .errors import SectorsSchemaError
 from .models import (
     CachedBrokerSummaryDay,
@@ -31,25 +31,6 @@ SCHEMA_VERSION = "1"
 
 def _add_days(value: date, days: int) -> date:
     return date.fromordinal(value.toordinal() + days)
-
-
-def _subtract_spans(requested: DateSpan, covered: list[DateSpan]) -> list[DateSpan]:
-    """Return inclusive portions of *requested* not covered by *covered*."""
-    missing: list[DateSpan] = []
-    cursor = requested.start
-    for span in sorted(covered, key=lambda item: item.start):
-        if span.end < cursor:
-            continue
-        if span.start > requested.end:
-            break
-        if span.start > cursor:
-            missing.append(DateSpan(start=cursor, end=_add_days(span.start, -1)))
-        if span.end >= requested.end:
-            return missing
-        cursor = _add_days(max(cursor, span.end), 1)
-    if cursor <= requested.end:
-        missing.append(DateSpan(start=cursor, end=requested.end))
-    return missing
 
 
 def _chunk_span(span: DateSpan, max_days: int) -> list[DateSpan]:
@@ -80,7 +61,7 @@ def _plan_for_symbols(
             ("broker", BROKER_MAX_DAYS),
         ):
             _, covered = read_cache(symbol, data_type, cache_dir)
-            for span in _subtract_spans(DateSpan(start=start, end=end), covered):
+            for span in missing_spans(DateSpan(start=start, end=end), covered):
                 for sub in _chunk_span(span, max_days):
                     chunks.append(
                         SyncChunk(
