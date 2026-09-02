@@ -22,7 +22,7 @@ def make_adapter(start: date, end: date) -> InMemorySectorsAdapter:
 
 
 def test_ping_sectors_reports_each_stage_for_controlled_response(monkeypatch):
-    start = date(2026, 8, 26)
+    start = date(2026, 8, 27)
     end = date(2026, 9, 2)
     adapter = make_adapter(start, end)
     out = StringIO()
@@ -96,6 +96,41 @@ def test_ping_sectors_reports_malformed_response(monkeypatch):
     assert "response schema invalid" in err.getvalue()
     assert "close" in err.getvalue()
     assert "test-dummy-key-123" not in out.getvalue() + err.getvalue()
+
+
+def test_ping_sectors_logs_failed_auth_stage(monkeypatch):
+    adapter = InMemorySectorsAdapter(
+        daily=[],
+        broker_summary={},
+        error=SectorsAuthError("Sectors rejected the API key (HTTP 401)"),
+    )
+    out = StringIO()
+    monkeypatch.setenv("SECTORS_API_KEY", "test-dummy-key-123")
+
+    assert main(
+        ["ping-sectors"],
+        build_market_data=lambda _config: adapter,
+        stdout=out,
+        stderr=StringIO(),
+        today=lambda: date(2026, 9, 2),
+    ) == 2
+    stages = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert stages[-1] == {
+        "event": "sector_ping_stage",
+        "stage": "auth",
+        "status": "error",
+        "ts": stages[-1]["ts"],
+    }
+
+
+def test_ping_sectors_handles_invalid_timezone(monkeypatch):
+    monkeypatch.setenv("SECTORS_API_KEY", "test-dummy-key-123")
+    monkeypatch.setenv("KIM_SECTORS_TIMEZONE", "not-a-timezone")
+    err = StringIO()
+
+    assert main(["ping-sectors"], stdout=StringIO(), stderr=err) == 1
+    assert "configuration invalid" in err.getvalue()
+    assert "Traceback" not in err.getvalue()
 
 
 def test_ping_sectors_requires_api_key(monkeypatch):

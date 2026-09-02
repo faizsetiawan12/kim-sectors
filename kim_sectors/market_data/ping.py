@@ -8,10 +8,14 @@ from logging import Logger
 from zoneinfo import ZoneInfo
 
 from .base import SectorsMarketData
+from .errors import SectorsSchemaError
 from .models import PingReport
 from ..observability import log_stage
 
 DEFAULT_PING_SYMBOL = "BBCA"
+MIN_PING_WINDOW_DAYS = 1
+MAX_PING_WINDOW_DAYS = 14
+PING_CREDITS = 2
 _SYMBOL_PATTERN = re.compile(r"^[A-Z]{4}(?:\.JK)?$")
 
 
@@ -28,18 +32,20 @@ def ping_sectors(
 
     The first successful response proves authentication; there is no separate
     auth probe because that would spend another API credit. ``window_days``
-    stays below the broker-summary endpoint's fourteen-day limit.
+    stays below the broker-summary endpoint's limit.
     """
     if not _SYMBOL_PATTERN.fullmatch(symbol):
         raise ValueError("symbol must contain four uppercase letters, optionally followed by .JK")
-    if not 1 <= window_days <= 14:
-        raise ValueError("window-days must be between 1 and 14")
+    if not MIN_PING_WINDOW_DAYS <= window_days <= MAX_PING_WINDOW_DAYS:
+        raise ValueError(
+            f"window-days must be between {MIN_PING_WINDOW_DAYS} and {MAX_PING_WINDOW_DAYS}"
+        )
 
     window_end = today or datetime.now(timezone).date()
     window_start = date.fromordinal(window_end.toordinal() - window_days + 1)
     daily = client.fetch_daily_bars(symbol, window_start, window_end)
-    log_stage(logger, "auth", endpoint=f"/v2/daily/{symbol}/", status="ok")
     broker_summary = client.fetch_broker_summary(symbol, window_start, window_end)
+    log_stage(logger, "auth", endpoint=f"/v2/daily/{symbol}/", status="ok")
     log_stage(
         logger,
         "fetch",
@@ -55,13 +61,22 @@ def ping_sectors(
         broker_days=len(broker_summary.data),
         status="ok",
     )
+    if not daily or not broker_summary.data:
+        raise SectorsSchemaError("Sectors returned no daily bars or broker-summary days")
+
+    if broker_summary.symbol != symbol or any(bar.symbol != symbol for bar in daily):
+        raise SectorsSchemaError("Sectors response symbol does not match requested symbol")
+
+    if broker_summary.start != window_start or broker_summary.end != window_end:
+        raise SectorsSchemaError("Sectors broker-summary range does not match requested window")
+
     report = PingReport(
         symbol=symbol,
         window_start=window_start,
         window_end=window_end,
         daily_bars=daily,
         broker_summary=broker_summary,
-        credits_spent=2,
+        credits_spent=PING_CREDITS,
         completed_at=datetime.now(timezone),
     )
     log_stage(

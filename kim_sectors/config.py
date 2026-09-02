@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,15 @@ class SectorsConfig(BaseSettings):
     kim_sectors_timezone: str = "Asia/Jakarta"
     kim_sectors_cache_dir: Path = Path("data/cache")
     kim_sectors_output_dir: Path = Path("output/reports")
+
+    @field_validator("sectors_api_key", mode="before")
+    @classmethod
+    def require_api_key(cls, value: str | SecretStr) -> str | SecretStr:
+        """Reject whitespace-only values at the configuration boundary."""
+        raw_value = value.get_secret_value() if isinstance(value, SecretStr) else value
+        if not isinstance(raw_value, str) or not raw_value.strip():
+            raise ValueError("SECTORS_API_KEY is not set")
+        return value
 
     @property
     def api_key(self) -> str:
