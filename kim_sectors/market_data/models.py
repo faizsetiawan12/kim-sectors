@@ -16,6 +16,9 @@ class DailyBar(StrictModel):
     symbol: str
     date: date
     close: Decimal
+    open: Decimal
+    high: Decimal
+    low: Decimal
     volume: int
     market_cap: Decimal
 
@@ -25,14 +28,14 @@ class BrokerSummaryRow(StrictModel):
     bfreq: int
     blot: int
     bval: Decimal
-    bavg_per_share: Decimal
+    bavg_per_share: Decimal | None
     sfreq: int
     slot: int
     sval: Decimal
-    savg_per_share: Decimal
+    savg_per_share: Decimal | None
     nlot: int
     nval: Decimal
-    navg_per_share: Decimal
+    navg_per_share: Decimal | None
 
 
 class BrokerSummaryDay(StrictModel):

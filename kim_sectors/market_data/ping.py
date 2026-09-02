@@ -19,6 +19,11 @@ PING_CREDITS = 2
 _SYMBOL_PATTERN = re.compile(r"^[A-Z]{4}(?:\.JK)?$")
 
 
+def _same_symbol(left: str, right: str) -> bool:
+    """Compare IDX symbols with or without the API's ``.JK`` suffix."""
+    return left.removesuffix(".JK") == right.removesuffix(".JK")
+
+
 def ping_sectors(
     client: SectorsMarketData,
     *,
@@ -64,7 +69,9 @@ def ping_sectors(
     if not daily or not broker_summary.data:
         raise SectorsSchemaError("Sectors returned no daily bars or broker-summary days")
 
-    if broker_summary.symbol != symbol or any(bar.symbol != symbol for bar in daily):
+    if not _same_symbol(broker_summary.symbol, symbol) or any(
+        not _same_symbol(bar.symbol, symbol) for bar in daily
+    ):
         raise SectorsSchemaError("Sectors response symbol does not match requested symbol")
 
     if broker_summary.start != window_start or broker_summary.end != window_end:

@@ -21,6 +21,9 @@ def daily_bars_payload(symbol: str = "BBCA", *, start: date, end: date) -> list[
                 "symbol": symbol,
                 "date": date.fromordinal(d).isoformat(),
                 "close": 9400.0 + day * 10.0,
+                "open": 9350.0 + day * 10.0,
+                "high": 9450.0 + day * 10.0,
+                "low": 9300.0 + day * 10.0,
                 "volume": 1000000 + day * 5000,
                 "market_cap": 100000000000.0,
             }
