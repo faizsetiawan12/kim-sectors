@@ -1,9 +1,13 @@
-# Agent Instructions
+# AGENTS.md — kim-sectors
 
-## Agent skills
+KIM sector analysis and factor research repository.
 
-### Issue tracker
-GitHub issues via `gh` CLI for `faizsetiawan12/kim-sectors`. See `docs/agents/issue-tracker.md`.
+## Governance & Entry
 
-### Domain docs
-Single-context with `CONTEXT.md` at the root and `docs/adr/`. See `docs/agents/domain.md`.
+- Read `/home/faiz/KIM/AGENTS.md` and `/home/faiz/KIM/agents/PLAYBOOK.md` for shared KIM authority and rules.
+- KIM principals: Faiz, Jimmy, Oscar, Wahyu.
+
+## Agent Skills & Tracking
+
+- Issue tracking via `gh` CLI for `faizsetiawan12/kim-sectors`.
+- Domain docs: single-context with `CONTEXT.md` at root and `docs/adr/`.
