@@ -20,7 +20,7 @@ from ..market_data.cache import load_universe_membership_records, read_cache
 from ..market_data.errors import CacheError
 from ..observability import log_stage
 from ..strategy.cache_access import select_membership
-from ..strategy.models import SignalReport
+from ..strategy.models import SignalCandidate, SignalReport
 from ..strategy.signal import rank_signal
 from .coverage import check_coverage
 from .models import (
@@ -58,8 +58,6 @@ def _benchmark_comparison(
     *,
     index: str,
     symbols: list[str],
-    start_universe: frozenset[str],
-    end_universe: frozenset[str],
     prices: dict[str, dict[date, Decimal]],
     sessions: list[date],
     start: date,
@@ -74,9 +72,7 @@ def _benchmark_comparison(
     eligible = [
         symbol
         for symbol in symbols
-        if symbol in start_universe
-        and symbol in end_universe
-        and start in prices.get(symbol, {})
+        if start in prices.get(symbol, {})
         and end in prices.get(symbol, {})
         and prices[symbol][start] > 0
         and prices[symbol][end] > 0
@@ -115,6 +111,19 @@ def _benchmark_comparison(
             "universe symbols with cached endpoint closes"
         ),
     )
+
+
+def _target_symbols(
+    candidates: list[SignalCandidate],
+    active_symbols: set[str],
+    top_k: int,
+) -> list[str]:
+    """Return the top-k candidates that remain in the active universe."""
+    return [
+        candidate.symbol
+        for candidate in candidates
+        if candidate.symbol in active_symbols
+    ][:top_k]
 
 
 def _compute_metrics(
@@ -335,11 +344,7 @@ def run_backtest(
             observations += len(report.candidates)
             ineligible_observations += len(report.ineligible)
             active_symbols = set(active_membership.symbols)
-            target = [
-                c.symbol
-                for c in report.candidates[:top_k]
-                if c.symbol in active_symbols
-            ]
+            target = _target_symbols(report.candidates, active_symbols, top_k)
             skipped: list[str] = []
 
             for symbol in sorted(holdings):
@@ -438,11 +443,7 @@ def run_backtest(
         observations += len(report.candidates)
         ineligible_observations += len(report.ineligible)
         active_symbols = set(active_membership.symbols)
-        target = [
-            c.symbol
-            for c in report.candidates[:top_k]
-            if c.symbol in active_symbols
-        ]
+        target = _target_symbols(report.candidates, active_symbols, top_k)
         events.append(
             RebalanceEvent(
                 signal_date=signal_date,
@@ -477,10 +478,6 @@ def run_backtest(
     benchmark = _benchmark_comparison(
         index=index,
         symbols=symbols,
-        start_universe=frozenset(membership.symbols),
-        end_universe=frozenset(
-            select_membership(index, end, cache_dir).symbols
-        ),
         prices=prices,
         sessions=sessions,
         start=start,
