@@ -70,6 +70,7 @@ def test_sync_cache_fetch_over_weekend_succeeds(monkeypatch, tmp_path):
     assert "coverage" not in error.getvalue()
     daily = json.loads((tmp_path / "cache" / "daily" / "BBCA.json").read_text())
     assert [row["date"] for row in daily["rows"]] == ["2026-08-03"]
+    assert daily["covered_spans"] == [{"start": "2026-08-01", "end": "2026-08-03"}]
 
 def test_sync_cache_fetch_rejects_unsorted_daily_rows(monkeypatch, tmp_path):
     adapter = market_days_adapter(["BBCA"])
@@ -94,3 +95,49 @@ def test_sync_cache_fetch_rejects_out_of_bounds_daily_rows(monkeypatch, tmp_path
 
     assert result == 3
     assert "range" in error.getvalue()
+
+def test_sync_cache_fetch_skips_indonesian_exchange_holidays(monkeypatch, tmp_path):
+    # Independence Day (2026-08-17) is a weekday holiday on IDX.
+    # Response spans 2026-08-14 (Fri) to 2026-08-18 (Tue), omitting weekend and Mon 17th.
+    holiday = date(2026, 8, 17)
+    adapter = InMemorySectorsAdapter(
+        universe=["BBCA"],
+        daily=lambda symbol, start, end: [
+            {
+                "symbol": symbol,
+                "date": day.isoformat(),
+                "close": 9400.0,
+                "open": 9350.0,
+                "high": 9450.0,
+                "low": 9300.0,
+                "volume": 1000000,
+                "market_cap": 100000000000.0,
+            }
+            for day in trading_days(start, end)
+            if day != holiday
+        ],
+        broker_summary=lambda symbol, start, end: {
+            **broker_summary_payload(symbol, start=start, end=end),
+            "data": [
+                {"date": day.isoformat(), "summary": []}
+                for day in trading_days(start, end)
+                if day != holiday
+            ],
+        },
+    )
+    monkeypatch.setenv("SECTORS_API_KEY", "test-dummy-key-123")
+    monkeypatch.setenv("KIM_SECTORS_CACHE_DIR", str(tmp_path / "cache"))
+    output, error = StringIO(), StringIO()
+    result = main(
+        ["sync-cache", "--start", "2026-08-14", "--end", "2026-08-18", "--fetch"],
+        build_market_data=lambda _config: adapter,
+        stdout=output,
+        stderr=error,
+        today=lambda: date(2026, 9, 2),
+    )
+
+    assert result == 0
+    assert error.getvalue() == ""
+    daily = json.loads((tmp_path / "cache" / "daily" / "BBCA.json").read_text())
+    assert [row["date"] for row in daily["rows"]] == ["2026-08-14", "2026-08-18"]
+    assert daily["covered_spans"] == [{"start": "2026-08-14", "end": "2026-08-18"}]
