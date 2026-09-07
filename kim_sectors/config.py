@@ -25,6 +25,11 @@ class SectorsConfig(BaseSettings):
     kim_sectors_output_dir: Path = Path("output/reports")
     kim_sectors_universe_index: str = "lq45"
 
+    # Telegram delivery (optional: briefs are still saved without it).
+    telegram_bot_token: SecretStr | None = None
+    telegram_chat_id: str | None = None
+    telegram_message_thread_id: int | None = None
+
     @field_validator("sectors_api_key", mode="before")
     @classmethod
     def require_api_key(cls, value: str | SecretStr) -> str | SecretStr:
