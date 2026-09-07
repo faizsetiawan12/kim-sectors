@@ -127,10 +127,41 @@ ignored.
 Exit codes: `0` success, `1` unexpected/cache failure (including missing
 universe membership, a future market date, or invalid lookback/min-samples).
 
-## Planned commands
+### `run-daily`
+
+Execute the post-market pipeline end to end for the LQ45 universe: fetch and
+validate the data cache (live runs only), calculate Momentum × Broker EV, rank
+candidates, save the Markdown and JSON Daily Market Brief under
+`output/reports/daily/<market-date>.md` and `.json`, then deliver a compact
+executive brief through Telegram. Artifacts are always written before any
+Telegram delivery is attempted; a failed delivery exits non-zero (`5`) and the
+saved briefs remain available.
 
 ```bash
 python main.py run-daily
+python main.py run-daily --market-date 2026-08-15
+```
+
+Without `--market-date` the brief uses today (WIB) and the live Sectors fetch
+runs first, synchronizing the trailing 60 calendar days of daily and broker
+data. With a past `--market-date`, the same single implementation replays from
+cached data only (no network calls or API credits). `--lookback` (default 21)
+and `--min-samples` (default 5) mirror the `signal` command.
+
+Telegram delivery requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` (and
+optionally `TELEGRAM_MESSAGE_THREAD_ID`); without them the brief is still saved
+and the notify stage is logged as `skipped`. Each artifact includes the market
+date, WIB run timestamp, data freshness from cache provenance, universe
+coverage, ranked candidates with score components, exclusions/warnings, and the
+research-only disclaimer.
+
+Exit codes: `0` success (including a skipped delivery), `1` unexpected/cache
+failure (including a future market date or invalid lookback/min-samples), `2`
+authentication, `3` schema, `4` request, `5` Telegram delivery failure.
+
+## Planned commands
+
+```bash
 python main.py run-backtest --universe lq45 --top-k 3
 ```
 
