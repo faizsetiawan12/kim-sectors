@@ -10,78 +10,50 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import ValidationError
 
-from kim_sectors.config import SectorsConfig
-from kim_sectors.market_data import (
-    DEFAULT_PING_SYMBOL,
-    CacheError,
-    MarketDataError,
-    SectorsAuthError,
-    SectorsRequestError,
-    SectorsSchemaError,
-    SectorsMarketData,
-    ping_sectors,
-    sync_cache,
-)
 from kim_sectors.backtest import (
     DEFAULT_COST_BPS,
     DEFAULT_REBALANCE_SESSIONS,
     DEFAULT_SLIPPAGE_BPS,
     DEFAULT_TOP_K,
-    run_backtest,
 )
-from kim_sectors.observability import configure_logging
-from kim_sectors.outputs.telegram import TelegramDeliveryError, TelegramSender
-from kim_sectors.paths import ensure_dirs
-from kim_sectors.strategy import (
-    DEFAULT_MIN_SAMPLES,
-    DEFAULT_MOMENTUM_LOOKBACK,
-    rank_momentum,
-    rank_signal,
-)
-from kim_sectors.workflow import run_daily
-from kim_sectors.workflow.adapters import (
-    build_market_data as default_build_market_data,
-    build_telegram_sender as default_build_telegram_sender,
-)
+from kim_sectors.config import SectorsConfig
+from kim_sectors.market_data import DEFAULT_PING_SYMBOL, SectorsMarketData
+from kim_sectors.outputs.telegram import TelegramSender
+from kim_sectors.strategy import DEFAULT_MIN_SAMPLES, DEFAULT_MOMENTUM_LOOKBACK
+from kim_sectors.workflow import commands
 from kim_sectors.workflow.command_failures import (
     EXIT_AUTH,
-    EXIT_REQUEST,
-    EXIT_SCHEMA,
-    EXIT_TELEGRAM,
     EXIT_UNEXPECTED,
-    translate_command_error,
-    unexpected_failure,
 )
-from kim_sectors.outputs.errors import format_backtest_coverage_error
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python main.py")
-    commands = parser.add_subparsers(dest="command", required=True)
-    ping = commands.add_parser("ping-sectors", help="verify live Sectors market data")
+    commands_parser = parser.add_subparsers(dest="command", required=True)
+    ping = commands_parser.add_parser("ping-sectors", help="verify live Sectors market data")
     ping.add_argument("--symbol", default=DEFAULT_PING_SYMBOL)
     ping.add_argument("--window-days", type=int, default=7)
-    sync = commands.add_parser("sync-cache", help="resolve universe and sync market data cache")
+    sync = commands_parser.add_parser("sync-cache", help="resolve universe and sync market data cache")
     sync.add_argument("--start", required=True, type=date.fromisoformat)
     sync.add_argument("--end", required=True, type=date.fromisoformat)
     sync.add_argument("--fetch", action="store_true", default=False)
     sync.add_argument("--refresh-universe", action="store_true", default=False)
-    rank = commands.add_parser("rank", help="rank universe by trailing momentum from cache")
+    rank = commands_parser.add_parser("rank", help="rank universe by trailing momentum from cache")
     rank.add_argument("--market-date", required=True, type=date.fromisoformat)
     rank.add_argument("--lookback", type=int, default=DEFAULT_MOMENTUM_LOOKBACK)
-    signal = commands.add_parser(
+    signal = commands_parser.add_parser(
         "signal", help="rank universe by Momentum x Broker EV from cache"
     )
     signal.add_argument("--market-date", required=True, type=date.fromisoformat)
     signal.add_argument("--lookback", type=int, default=DEFAULT_MOMENTUM_LOOKBACK)
     signal.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
-    daily = commands.add_parser(
+    daily = commands_parser.add_parser(
         "run-daily", help="run the post-market LQ45 pipeline and deliver the daily brief"
     )
     daily.add_argument("--market-date", type=date.fromisoformat, default=None)
     daily.add_argument("--lookback", type=int, default=DEFAULT_MOMENTUM_LOOKBACK)
     daily.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
-    backtest = commands.add_parser(
+    backtest = commands_parser.add_parser(
         "run-backtest", help="replay Momentum x Broker EV over cached history"
     )
     backtest.add_argument("--universe", default=None)
@@ -100,6 +72,80 @@ def _today(timezone: ZoneInfo) -> date:
     return datetime.now(timezone).date()
 
 
+def _dispatch(
+    command: str,
+    config: SectorsConfig,
+    args: argparse.Namespace,
+    *,
+    build_market_data: Callable[[SectorsConfig], SectorsMarketData] | None,
+    build_telegram_sender: Callable[[SectorsConfig], TelegramSender] | None,
+    stdout: TextIO,
+    stderr: TextIO,
+    timezone: ZoneInfo,
+    current_date: date,
+) -> int:
+    """Dispatch parsed command to corresponding workflow handler."""
+    if command == "ping-sectors":
+        return commands.run_ping(
+            config,
+            args,
+            build_market_data=build_market_data,
+            stdout=stdout,
+            stderr=stderr,
+            timezone=timezone,
+            today=current_date,
+        )
+    if command == "sync-cache":
+        return commands.run_sync_cache(
+            config,
+            args,
+            build_market_data=build_market_data,
+            stdout=stdout,
+            stderr=stderr,
+            timezone=timezone,
+            today=current_date,
+        )
+    if command == "rank":
+        return commands.run_rank(
+            config,
+            args,
+            stdout=stdout,
+            stderr=stderr,
+            timezone=timezone,
+            today=current_date,
+        )
+    if command == "signal":
+        return commands.run_signal(
+            config,
+            args,
+            stdout=stdout,
+            stderr=stderr,
+            timezone=timezone,
+            today=current_date,
+        )
+    if command == "run-daily":
+        return commands.run_daily_command(
+            config,
+            args,
+            build_market_data=build_market_data,
+            build_telegram_sender=build_telegram_sender,
+            stdout=stdout,
+            stderr=stderr,
+            timezone=timezone,
+            today=current_date,
+        )
+    if command == "run-backtest":
+        return commands.run_backtest_command(
+            config,
+            args,
+            stdout=stdout,
+            stderr=stderr,
+            timezone=timezone,
+            today=current_date,
+        )
+    return EXIT_UNEXPECTED
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -109,7 +155,7 @@ def main(
     stderr: TextIO | None = None,
     today: Callable[[], date] | None = None,
 ) -> int:
-    """Run a command and return its shell exit code."""
+    """Parse arguments, load configuration, dispatch, and return the shell exit code."""
     stdout = stdout or sys.stdout
     stderr = stderr or sys.stderr
     args = _parser().parse_args(argv)
@@ -129,299 +175,18 @@ def main(
         print(f"error: configuration invalid: {error}", file=stderr)
         return EXIT_UNEXPECTED
 
-    if args.command == "ping-sectors":
-        return _run_ping(
-            config,
-            args,
-            build_market_data=build_market_data,
-            stdout=stdout,
-            stderr=stderr,
-            timezone=timezone,
-            today=today() if today else _today(timezone),
-        )
-
-    if args.command == "sync-cache":
-        return _run_sync_cache(
-            config,
-            args,
-            build_market_data=build_market_data,
-            stdout=stdout,
-            stderr=stderr,
-            timezone=timezone,
-            today=today() if today else _today(timezone),
-        )
-
-    if args.command == "rank":
-        return _run_rank(
-            config,
-            args,
-            stdout=stdout,
-            stderr=stderr,
-            timezone=timezone,
-            today=today() if today else _today(timezone),
-        )
-
-    if args.command == "signal":
-        return _run_signal(
-            config,
-            args,
-            stdout=stdout,
-            stderr=stderr,
-            timezone=timezone,
-            today=today() if today else _today(timezone),
-        )
-
-    if args.command == "run-daily":
-        return _run_daily(
-            config,
-            args,
-            build_market_data=build_market_data,
-            build_telegram_sender=build_telegram_sender,
-            stdout=stdout,
-            stderr=stderr,
-            timezone=timezone,
-            today=today() if today else _today(timezone),
-        )
-
-    if args.command == "run-backtest":
-        return _run_backtest(
-            config,
-            args,
-            stdout=stdout,
-            stderr=stderr,
-            timezone=timezone,
-            today=today() if today else _today(timezone),
-        )
-
-    return EXIT_UNEXPECTED
-
-
-def _run_ping(
-    config: SectorsConfig,
-    args: argparse.Namespace,
-    *,
-    build_market_data: Callable[[SectorsConfig], SectorsMarketData] | None,
-    stdout: TextIO,
-    stderr: TextIO,
-    timezone: ZoneInfo,
-    today: date,
-) -> int:
-    """Execute the ping-sectors command."""
-    logger = None
-    try:
-        logger = configure_logging(stdout, timezone)
-        ensure_dirs(
-            cache_dir=config.kim_sectors_cache_dir,
-            output_dir=config.kim_sectors_output_dir,
-        )
-        client = default_build_market_data(config, build_market_data)
-        ping_sectors(
-            client,
-            symbol=args.symbol,
-            window_days=args.window_days,
-            timezone=timezone,
-            logger=logger,
-            today=today,
-        )
-        return 0
-    except (SectorsAuthError, SectorsSchemaError, SectorsRequestError) as error:
-        return translate_command_error(error, logger, stderr)
-    except (MarketDataError, ValueError) as error:
-        return translate_command_error(error, logger, stderr)
-
-
-def _run_sync_cache(
-    config: SectorsConfig,
-    args: argparse.Namespace,
-    *,
-    build_market_data: Callable[[SectorsConfig], SectorsMarketData] | None,
-    stdout: TextIO,
-    stderr: TextIO,
-    timezone: ZoneInfo,
-    today: date,
-) -> int:
-    """Execute the sync-cache command."""
-    if args.fetch:
-        client = default_build_market_data(config, build_market_data)
-        ensure_dirs(
-            cache_dir=config.kim_sectors_cache_dir,
-            output_dir=config.kim_sectors_output_dir,
-        )
-    else:
-        from kim_sectors.market_data.memory import InMemorySectorsAdapter
-
-        client = InMemorySectorsAdapter()
-        # Preview mode: no directories, no Sectors API call needed
-
-    logger = configure_logging(stdout, timezone, event="sector_sync_stage", name="kim_sectors.sync")
-    try:
-        report = sync_cache(
-            client,
-            index=config.kim_sectors_universe_index,
-            start=args.start,
-            end=args.end,
-            cache_dir=config.kim_sectors_cache_dir,
-            timezone=timezone,
-            logger=logger,
-            today=today,
-            fetch=args.fetch,
-            refresh_universe=args.refresh_universe,
-        )
-        if report.status != "ok":
-            return EXIT_UNEXPECTED
-        return 0
-    except (
-        SectorsAuthError,
-        SectorsSchemaError,
-        SectorsRequestError,
-        CacheError,
-        MarketDataError,
-        ValueError,
-    ) as error:
-        return translate_command_error(error, logger, stderr)
-
-
-def _run_rank(
-    config: SectorsConfig,
-    args: argparse.Namespace,
-    *,
-    stdout: TextIO,
-    stderr: TextIO,
-    timezone: ZoneInfo,
-    today: date,
-) -> int:
-    """Execute the rank command over validated cache records only."""
-    logger = configure_logging(stdout, timezone, event="sector_rank_stage", name="kim_sectors.rank")
-    try:
-        report = rank_momentum(
-            index=config.kim_sectors_universe_index,
-            market_date=args.market_date,
-            lookback=args.lookback,
-            cache_dir=config.kim_sectors_cache_dir,
-            logger=logger,
-            today=today,
-        )
-        if report.status != "ok":
-            return EXIT_UNEXPECTED
-        return 0
-    except (CacheError, MarketDataError, ValueError) as error:
-        return translate_command_error(error, logger, stderr)
-
-
-def _run_signal(
-    config: SectorsConfig,
-    args: argparse.Namespace,
-    *,
-    stdout: TextIO,
-    stderr: TextIO,
-    timezone: ZoneInfo,
-    today: date,
-) -> int:
-    """Execute the signal command over validated cache records only."""
-    logger = configure_logging(stdout, timezone, event="sector_signal_stage", name="kim_sectors.signal")
-    try:
-        report = rank_signal(
-            index=config.kim_sectors_universe_index,
-            market_date=args.market_date,
-            lookback=args.lookback,
-            min_samples=args.min_samples,
-            cache_dir=config.kim_sectors_cache_dir,
-            logger=logger,
-            today=today,
-        )
-        if report.status != "ok":
-            return EXIT_UNEXPECTED
-        return 0
-    except (CacheError, MarketDataError, ValueError) as error:
-        return translate_command_error(error, logger, stderr)
-
-
-def _run_daily(
-    config: SectorsConfig,
-    args: argparse.Namespace,
-    *,
-    build_market_data: Callable[[SectorsConfig], SectorsMarketData] | None,
-    build_telegram_sender: Callable[[SectorsConfig], TelegramSender] | None,
-    stdout: TextIO,
-    stderr: TextIO,
-    timezone: ZoneInfo,
-    today: date,
-) -> int:
-    """Execute the run-daily command (live pipeline or manual replay)."""
-    market_date = args.market_date if args.market_date is not None else today
-    logger = configure_logging(
-        stdout, timezone, event="sector_daily_stage", name="kim_sectors.daily"
+    current_date = today() if today else _today(timezone)
+    return _dispatch(
+        args.command,
+        config,
+        args,
+        build_market_data=build_market_data,
+        build_telegram_sender=build_telegram_sender,
+        stdout=stdout,
+        stderr=stderr,
+        timezone=timezone,
+        current_date=current_date,
     )
-    try:
-        client = default_build_market_data(config, build_market_data)
-        sender = default_build_telegram_sender(config, build_telegram_sender)
-        run_daily(
-            client=client,
-            index=config.kim_sectors_universe_index,
-            market_date=market_date,
-            lookback=args.lookback,
-            min_samples=args.min_samples,
-            cache_dir=config.kim_sectors_cache_dir,
-            output_dir=config.kim_sectors_output_dir,
-            timezone=timezone,
-            logger=logger,
-            today=today,
-            sender=sender,
-            fetch=market_date == today,
-        )
-        return 0
-    except (
-        TelegramDeliveryError,
-        SectorsAuthError,
-        SectorsSchemaError,
-        SectorsRequestError,
-        CacheError,
-        MarketDataError,
-        ValueError,
-    ) as error:
-        return translate_command_error(error, logger, stderr)
-
-
-def _run_backtest(
-    config: SectorsConfig,
-    args: argparse.Namespace,
-    *,
-    stdout: TextIO,
-    stderr: TextIO,
-    timezone: ZoneInfo,
-    today: date,
-) -> int:
-    """Execute the run-backtest command over validated cache records only."""
-    index = args.universe or config.kim_sectors_universe_index
-    ensure_dirs(
-        cache_dir=config.kim_sectors_cache_dir,
-        output_dir=config.kim_sectors_output_dir,
-    )
-    logger = configure_logging(
-        stdout, timezone, event="sector_backtest_stage", name="kim_sectors.backtest"
-    )
-    try:
-        report = run_backtest(
-            index=index,
-            start=args.start,
-            end=args.end,
-            lookback=args.lookback,
-            min_samples=args.min_samples,
-            top_k=args.top_k,
-            rebalance_sessions=args.rebalance_sessions,
-            cost_bps=args.cost_bps,
-            slippage_bps=args.slippage_bps,
-            cache_dir=config.kim_sectors_cache_dir,
-            logger=logger,
-            today=today,
-            timezone=timezone,
-            output_dir=config.kim_sectors_output_dir,
-        )
-        if report.status != "ok":
-            return unexpected_failure(format_backtest_coverage_error(report), stderr)
-        return 0
-    except (CacheError, MarketDataError, ValueError) as error:
-        return translate_command_error(error, logger, stderr)
 
 
 if __name__ == "__main__":

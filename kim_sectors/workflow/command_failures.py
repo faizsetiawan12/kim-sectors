@@ -28,10 +28,6 @@ def unexpected_failure(message: str, stderr: TextIO = sys.stderr) -> int:
     return EXIT_UNEXPECTED
 
 
-# Compatibility alias for earlier callers.
-fail = unexpected_failure
-
-
 def translate_command_error(
     error: Exception,
     logger: Logger | None,
@@ -57,7 +53,3 @@ def translate_command_error(
         print(f"error: telegram delivery failed: {error}", file=stderr)
         return EXIT_TELEGRAM
     return unexpected_failure(str(error), stderr)
-
-
-# Compatibility alias for earlier callers.
-translate_market_data_failure = translate_command_error
