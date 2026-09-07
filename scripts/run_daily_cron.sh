@@ -18,8 +18,10 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 export TZ="Asia/Jakarta"
 
 echo "=== [$(date '+%Y-%m-%d %H:%M:%S %Z')] Starting KIM Sectors Daily Pipeline ==="
+set +e
 "${PYTHON_BIN}" main.py run-daily "$@"
 EXIT_CODE=$?
+set -e
 echo "=== [$(date '+%Y-%m-%d %H:%M:%S %Z')] KIM Sectors Daily Pipeline finished with exit code ${EXIT_CODE} ==="
 
-exit ${EXIT_CODE}
+exit "${EXIT_CODE}"
