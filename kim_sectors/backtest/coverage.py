@@ -12,7 +12,7 @@ from datetime import date
 from logging import Logger
 from pathlib import Path
 
-from ..market_data.cache import missing_spans, read_cache
+from ..market_data.cache import merge_spans, missing_spans, read_cache
 from ..market_data.models import DateSpan
 from ..observability import log_stage
 from .models import CoverageReport, SymbolCoverage
@@ -25,11 +25,17 @@ def check_coverage(
     end: date,
     cache_dir: Path,
     logger: Logger,
+    windows: dict[str, list[DateSpan]] | None = None,
+    daily_windows: dict[str, list[DateSpan]] | None = None,
+    broker_windows: dict[str, list[DateSpan]] | None = None,
 ) -> CoverageReport:
-    """Return the coverage of ``[start, end]`` for each symbol and data type.
+    """Return cache coverage for each symbol's requested active windows.
 
-    Both daily bars and broker summaries must cover the full window. The
-    result is ``status="ok"`` only when no symbol has any missing span.
+    When ``windows`` is provided, each symbol is checked only for the
+    point-in-time membership tenures in which it can be used. This avoids
+    requiring data before a symbol joins or after it leaves the universe while
+    still reporting every missing active span. The default checks the full
+    replay window for callers without membership history.
     """
     requested = DateSpan(start=start, end=end)
     symbol_reports: list[SymbolCoverage] = []
@@ -37,13 +43,35 @@ def check_coverage(
     for symbol in symbols:
         _, daily_spans = read_cache(symbol, "daily", cache_dir)
         _, broker_spans = read_cache(symbol, "broker", cache_dir)
-        daily_missing = missing_spans(requested, daily_spans)
-        broker_missing = missing_spans(requested, broker_spans)
+        d_req = (
+            merge_spans(daily_windows.get(symbol, []))
+            if daily_windows is not None
+            else merge_spans(windows.get(symbol, []))
+            if windows is not None
+            else [requested]
+        )
+        b_req = (
+            merge_spans(broker_windows.get(symbol, []))
+            if broker_windows is not None
+            else merge_spans(windows.get(symbol, []))
+            if windows is not None
+            else [requested]
+        )
+        daily_missing = [
+            missing
+            for window in d_req
+            for missing in missing_spans(window, daily_spans)
+        ]
+        broker_missing = [
+            missing
+            for window in b_req
+            for missing in missing_spans(window, broker_spans)
+        ]
         symbol_reports.append(
             SymbolCoverage(
                 symbol=symbol,
-                daily_missing=daily_missing,
-                broker_missing=broker_missing,
+                daily_missing=merge_spans(daily_missing),
+                broker_missing=merge_spans(broker_missing),
             )
         )
         if daily_missing or broker_missing:
