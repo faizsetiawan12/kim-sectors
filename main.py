@@ -30,12 +30,8 @@ from kim_sectors.backtest import (
     DEFAULT_TOP_K,
     run_backtest,
 )
-from kim_sectors.observability import configure_logging, log_stage
-from kim_sectors.outputs.telegram import (
-    TelegramDeliveryError,
-    TelegramHttpSender,
-    TelegramSender,
-)
+from kim_sectors.observability import configure_logging
+from kim_sectors.outputs.telegram import TelegramDeliveryError, TelegramSender
 from kim_sectors.paths import ensure_dirs
 from kim_sectors.strategy import (
     DEFAULT_MIN_SAMPLES,
@@ -44,12 +40,23 @@ from kim_sectors.strategy import (
     rank_signal,
 )
 from kim_sectors.workflow import run_daily
+from kim_sectors.workflow.adapters import (
+    build_market_data as default_build_market_data,
+    build_telegram_sender as default_build_telegram_sender,
+)
+from kim_sectors.workflow.command_failures import (
+    EXIT_AUTH,
+    EXIT_REQUEST,
+    EXIT_SCHEMA,
+    EXIT_TELEGRAM,
+    EXIT_UNEXPECTED,
+    fail,
+    translate_market_data_failure,
+)
+from kim_sectors.outputs.errors import format_backtest_coverage_error
 
-EXIT_UNEXPECTED = 1
-EXIT_AUTH = 2
-EXIT_SCHEMA = 3
-EXIT_REQUEST = 4
-EXIT_TELEGRAM = 5
+# Kept as a module alias for callers/tests that patch the adapter boundary.
+SectorsHttpAdapter = default_build_market_data
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -211,8 +218,7 @@ def _run_ping(
             cache_dir=config.kim_sectors_cache_dir,
             output_dir=config.kim_sectors_output_dir,
         )
-        factory = build_market_data or SectorsHttpAdapter
-        client = factory(config)
+        client = default_build_market_data(config, build_market_data)
         ping_sectors(
             client,
             symbol=args.symbol,
@@ -222,24 +228,10 @@ def _run_ping(
             today=today,
         )
         return 0
-    except SectorsAuthError as error:
-        if logger:
-            log_stage(logger, "auth", status="error")
-        print(f"error: authentication failed: {error}", file=stderr)
-        return EXIT_AUTH
-    except SectorsSchemaError as error:
-        if logger:
-            log_stage(logger, "validate", status="error")
-        print(f"error: response schema invalid: {error}", file=stderr)
-        return EXIT_SCHEMA
-    except SectorsRequestError as error:
-        if logger:
-            log_stage(logger, "fetch", status="error")
-        print(f"error: Sectors request failed: {error}", file=stderr)
-        return EXIT_REQUEST
+    except (SectorsAuthError, SectorsSchemaError, SectorsRequestError) as error:
+        return translate_market_data_failure(error, logger, stderr)
     except (MarketDataError, ValueError) as error:
-        print(f"error: {error}", file=stderr)
-        return EXIT_UNEXPECTED
+        return translate_market_data_failure(error, logger, stderr)
 
 
 def _run_sync_cache(
@@ -253,13 +245,8 @@ def _run_sync_cache(
     today: date,
 ) -> int:
     """Execute the sync-cache command."""
-    if args.start > args.end:
-        print("error: --start must be on or before --end", file=stderr)
-        return EXIT_UNEXPECTED
-
     if args.fetch:
-        factory = build_market_data or SectorsHttpAdapter
-        client = factory(config)
+        client = default_build_market_data(config, build_market_data)
         ensure_dirs(
             cache_dir=config.kim_sectors_cache_dir,
             output_dir=config.kim_sectors_output_dir,
@@ -287,21 +274,15 @@ def _run_sync_cache(
         if report.status != "ok":
             return EXIT_UNEXPECTED
         return 0
-    except SectorsAuthError as error:
-        log_stage(logger, "auth", status="error")
-        print(f"error: authentication failed: {error}", file=stderr)
-        return EXIT_AUTH
-    except SectorsSchemaError as error:
-        log_stage(logger, "validate", status="error")
-        print(f"error: response schema invalid: {error}", file=stderr)
-        return EXIT_SCHEMA
-    except SectorsRequestError as error:
-        log_stage(logger, "fetch", status="error")
-        print(f"error: Sectors request failed: {error}", file=stderr)
-        return EXIT_REQUEST
-    except (CacheError, MarketDataError, ValueError) as error:
-        print(f"error: {error}", file=stderr)
-        return EXIT_UNEXPECTED
+    except (
+        SectorsAuthError,
+        SectorsSchemaError,
+        SectorsRequestError,
+        CacheError,
+        MarketDataError,
+        ValueError,
+    ) as error:
+        return translate_market_data_failure(error, logger, stderr)
 
 
 def _run_rank(
@@ -314,13 +295,6 @@ def _run_rank(
     today: date,
 ) -> int:
     """Execute the rank command over validated cache records only."""
-    if args.lookback < 1:
-        print("error: --lookback must be >= 1", file=stderr)
-        return EXIT_UNEXPECTED
-    if args.market_date > today:
-        print("error: --market-date cannot be in the future", file=stderr)
-        return EXIT_UNEXPECTED
-
     logger = configure_logging(stdout, timezone, event="sector_rank_stage", name="kim_sectors.rank")
     try:
         report = rank_momentum(
@@ -335,8 +309,7 @@ def _run_rank(
             return EXIT_UNEXPECTED
         return 0
     except (CacheError, MarketDataError, ValueError) as error:
-        print(f"error: {error}", file=stderr)
-        return EXIT_UNEXPECTED
+        return translate_market_data_failure(error, logger, stderr)
 
 
 def _run_signal(
@@ -349,16 +322,6 @@ def _run_signal(
     today: date,
 ) -> int:
     """Execute the signal command over validated cache records only."""
-    if args.lookback < 1:
-        print("error: --lookback must be >= 1", file=stderr)
-        return EXIT_UNEXPECTED
-    if args.min_samples < 1:
-        print("error: --min-samples must be >= 1", file=stderr)
-        return EXIT_UNEXPECTED
-    if args.market_date > today:
-        print("error: --market-date cannot be in the future", file=stderr)
-        return EXIT_UNEXPECTED
-
     logger = configure_logging(stdout, timezone, event="sector_signal_stage", name="kim_sectors.signal")
     try:
         report = rank_signal(
@@ -374,29 +337,7 @@ def _run_signal(
             return EXIT_UNEXPECTED
         return 0
     except (CacheError, MarketDataError, ValueError) as error:
-        print(f"error: {error}", file=stderr)
-        return EXIT_UNEXPECTED
-
-
-def _telegram_sender(
-    config: SectorsConfig,
-    build_telegram_sender: Callable[[SectorsConfig], TelegramSender] | None,
-) -> TelegramSender | None:
-    """Build the delivery sender, or None when Telegram is not configured."""
-    if build_telegram_sender is not None:
-        return build_telegram_sender(config)
-    token = config.telegram_bot_token
-    chat_id = config.telegram_chat_id
-    if token is None or chat_id is None:
-        return None
-    raw_token = token.get_secret_value().strip()
-    if not raw_token or not chat_id.strip():
-        return None
-    return TelegramHttpSender(
-        bot_token=raw_token,
-        chat_id=chat_id.strip(),
-        message_thread_id=config.telegram_message_thread_id,
-    )
+        return translate_market_data_failure(error, logger, stderr)
 
 
 def _run_daily(
@@ -412,23 +353,12 @@ def _run_daily(
 ) -> int:
     """Execute the run-daily command (live pipeline or manual replay)."""
     market_date = args.market_date if args.market_date is not None else today
-    if args.lookback < 1:
-        print("error: --lookback must be >= 1", file=stderr)
-        return EXIT_UNEXPECTED
-    if args.min_samples < 1:
-        print("error: --min-samples must be >= 1", file=stderr)
-        return EXIT_UNEXPECTED
-    if market_date > today:
-        print("error: --market-date cannot be in the future", file=stderr)
-        return EXIT_UNEXPECTED
-
     logger = configure_logging(
         stdout, timezone, event="sector_daily_stage", name="kim_sectors.daily"
     )
     try:
-        factory = build_market_data or SectorsHttpAdapter
-        client = factory(config)
-        sender = _telegram_sender(config, build_telegram_sender)
+        client = default_build_market_data(config, build_market_data)
+        sender = default_build_telegram_sender(config, build_telegram_sender)
         run_daily(
             client=client,
             index=config.kim_sectors_universe_index,
@@ -444,24 +374,16 @@ def _run_daily(
             fetch=market_date == today,
         )
         return 0
-    except TelegramDeliveryError as error:
-        print(f"error: telegram delivery failed: {error}", file=stderr)
-        return EXIT_TELEGRAM
-    except SectorsAuthError as error:
-        log_stage(logger, "auth", status="error")
-        print(f"error: authentication failed: {error}", file=stderr)
-        return EXIT_AUTH
-    except SectorsSchemaError as error:
-        log_stage(logger, "validate", status="error")
-        print(f"error: response schema invalid: {error}", file=stderr)
-        return EXIT_SCHEMA
-    except SectorsRequestError as error:
-        log_stage(logger, "fetch", status="error")
-        print(f"error: Sectors request failed: {error}", file=stderr)
-        return EXIT_REQUEST
-    except (CacheError, MarketDataError, ValueError) as error:
-        print(f"error: {error}", file=stderr)
-        return EXIT_UNEXPECTED
+    except (
+        TelegramDeliveryError,
+        SectorsAuthError,
+        SectorsSchemaError,
+        SectorsRequestError,
+        CacheError,
+        MarketDataError,
+        ValueError,
+    ) as error:
+        return translate_market_data_failure(error, logger, stderr)
 
 
 def _run_backtest(
@@ -475,31 +397,6 @@ def _run_backtest(
 ) -> int:
     """Execute the run-backtest command over validated cache records only."""
     index = args.universe or config.kim_sectors_universe_index
-    if args.start > args.end:
-        print("error: --start must be on or before --end", file=stderr)
-        return EXIT_UNEXPECTED
-    if args.end > today:
-        print("error: --end cannot be in the future", file=stderr)
-        return EXIT_UNEXPECTED
-    if args.lookback < 1:
-        print("error: --lookback must be >= 1", file=stderr)
-        return EXIT_UNEXPECTED
-    if args.min_samples < 1:
-        print("error: --min-samples must be >= 1", file=stderr)
-        return EXIT_UNEXPECTED
-    if args.top_k < 1:
-        print("error: --top-k must be >= 1", file=stderr)
-        return EXIT_UNEXPECTED
-    if args.rebalance_sessions < 1:
-        print("error: --rebalance-sessions must be >= 1", file=stderr)
-        return EXIT_UNEXPECTED
-    if args.cost_bps < 0:
-        print("error: --cost-bps must be >= 0", file=stderr)
-        return EXIT_UNEXPECTED
-    if args.slippage_bps < 0:
-        print("error: --slippage-bps must be >= 0", file=stderr)
-        return EXIT_UNEXPECTED
-
     ensure_dirs(
         cache_dir=config.kim_sectors_cache_dir,
         output_dir=config.kim_sectors_output_dir,
@@ -525,26 +422,10 @@ def _run_backtest(
             output_dir=config.kim_sectors_output_dir,
         )
         if report.status != "ok":
-            missing_symbols = [
-                item.symbol
-                for item in report.coverage.symbols
-                if item.daily_missing or item.broker_missing
-            ]
-            print(
-                "error: cache coverage incomplete for the requested window; "
-                "run `sync-cache --start {} --end {} --fetch` to fetch missing "
-                "history for: {}".format(
-                    args.start.isoformat(),
-                    args.end.isoformat(),
-                    ", ".join(missing_symbols),
-                ),
-                file=stderr,
-            )
-            return EXIT_UNEXPECTED
+            return fail(format_backtest_coverage_error(report), stderr)
         return 0
     except (CacheError, MarketDataError, ValueError) as error:
-        print(f"error: {error}", file=stderr)
-        return EXIT_UNEXPECTED
+        return translate_market_data_failure(error, logger, stderr)
 
 
 if __name__ == "__main__":
