@@ -16,7 +16,6 @@ from kim_sectors.market_data import (
     CacheError,
     MarketDataError,
     SectorsAuthError,
-    SectorsHttpAdapter,
     SectorsRequestError,
     SectorsSchemaError,
     SectorsMarketData,
@@ -50,13 +49,10 @@ from kim_sectors.workflow.command_failures import (
     EXIT_SCHEMA,
     EXIT_TELEGRAM,
     EXIT_UNEXPECTED,
-    fail,
-    translate_market_data_failure,
+    translate_command_error,
+    unexpected_failure,
 )
 from kim_sectors.outputs.errors import format_backtest_coverage_error
-
-# Kept as a module alias for callers/tests that patch the adapter boundary.
-SectorsHttpAdapter = default_build_market_data
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -229,9 +225,9 @@ def _run_ping(
         )
         return 0
     except (SectorsAuthError, SectorsSchemaError, SectorsRequestError) as error:
-        return translate_market_data_failure(error, logger, stderr)
+        return translate_command_error(error, logger, stderr)
     except (MarketDataError, ValueError) as error:
-        return translate_market_data_failure(error, logger, stderr)
+        return translate_command_error(error, logger, stderr)
 
 
 def _run_sync_cache(
@@ -282,7 +278,7 @@ def _run_sync_cache(
         MarketDataError,
         ValueError,
     ) as error:
-        return translate_market_data_failure(error, logger, stderr)
+        return translate_command_error(error, logger, stderr)
 
 
 def _run_rank(
@@ -309,7 +305,7 @@ def _run_rank(
             return EXIT_UNEXPECTED
         return 0
     except (CacheError, MarketDataError, ValueError) as error:
-        return translate_market_data_failure(error, logger, stderr)
+        return translate_command_error(error, logger, stderr)
 
 
 def _run_signal(
@@ -337,7 +333,7 @@ def _run_signal(
             return EXIT_UNEXPECTED
         return 0
     except (CacheError, MarketDataError, ValueError) as error:
-        return translate_market_data_failure(error, logger, stderr)
+        return translate_command_error(error, logger, stderr)
 
 
 def _run_daily(
@@ -383,7 +379,7 @@ def _run_daily(
         MarketDataError,
         ValueError,
     ) as error:
-        return translate_market_data_failure(error, logger, stderr)
+        return translate_command_error(error, logger, stderr)
 
 
 def _run_backtest(
@@ -422,10 +418,10 @@ def _run_backtest(
             output_dir=config.kim_sectors_output_dir,
         )
         if report.status != "ok":
-            return fail(format_backtest_coverage_error(report), stderr)
+            return unexpected_failure(format_backtest_coverage_error(report), stderr)
         return 0
     except (CacheError, MarketDataError, ValueError) as error:
-        return translate_market_data_failure(error, logger, stderr)
+        return translate_command_error(error, logger, stderr)
 
 
 if __name__ == "__main__":

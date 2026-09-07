@@ -1,4 +1,4 @@
-"""CLI adapter construction and credential boundary helpers."""
+"""Adapter construction and credential setup helpers for CLI workflows."""
 
 from __future__ import annotations
 
@@ -13,15 +13,19 @@ def build_market_data(
     config: SectorsConfig,
     factory: Callable[[SectorsConfig], SectorsMarketData] | None = None,
 ) -> SectorsMarketData:
-    """Build the configured market-data adapter, allowing controlled tests."""
-    return (factory or SectorsHttpAdapter)(config)
+    """Build the configured live market-data adapter, or a controlled test adapter."""
+    return factory(config) if factory is not None else SectorsHttpAdapter(config)
 
 
 def build_telegram_sender(
     config: SectorsConfig,
     factory: Callable[[SectorsConfig], TelegramSender] | None = None,
 ) -> TelegramSender | None:
-    """Build Telegram delivery when complete credentials are configured."""
+    """Build the delivery sender when complete Telegram credentials are configured.
+
+    A injected factory (the controlled test adapter) takes precedence; without
+    one, delivery is enabled only when both the bot token and chat id are set.
+    """
     if factory is not None:
         return factory(config)
 
