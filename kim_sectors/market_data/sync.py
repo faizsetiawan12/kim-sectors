@@ -7,6 +7,7 @@ from logging import Logger
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from ..dates import add_days
 from ..observability import log_stage
 from .base import SectorsMarketData, SyncMarketData
 from .cache import load_universe_membership, missing_spans, read_cache, write_cache
@@ -29,23 +30,70 @@ UNIVERSE_CREDIT_PER_PAGE = 1
 SCHEMA_VERSION = "1"
 
 
-def _add_days(value: date, days: int) -> date:
-    return date.fromordinal(value.toordinal() + days)
+def _covered_spans_for_chunk(
+    start: date, end: date, seen_dates: list[date]
+) -> list[DateSpan]:
+    """Calculate covered span without overstating data when only a subset was returned.
+
+    Weekends and exchange holidays are valid gaps. Non-trading days at the
+    requested chunk boundaries are preserved as covered, but unreturned weekdays
+    limit the covered span so missing trading days can be fetched later.
+    """
+    if not seen_dates:
+        return []
+    sorted_dates = sorted(seen_dates)
+    spans: list[DateSpan] = []
+    span_start = sorted_dates[0]
+    previous = sorted_dates[0]
+    for current in sorted_dates[1:]:
+        gap_days = [
+            add_days(previous, offset)
+            for offset in range(1, (current - previous).days)
+        ]
+        weekday_gap = sum(day.weekday() < 5 for day in gap_days)
+        if weekday_gap > 1:
+            spans.append(DateSpan(start=span_start, end=previous))
+            span_start = current
+        previous = current
+    spans.append(DateSpan(start=span_start, end=previous))
+
+    # A response at a chunk boundary can omit only weekend days. Keep those
+    # days covered, while leaving missing weekdays to a later synchronization.
+    first_span = spans[0]
+    cursor = add_days(first_span.start, -1)
+    while cursor >= start and cursor.weekday() >= 5:
+        first_span = DateSpan(start=cursor, end=first_span.end)
+        cursor = add_days(cursor, -1)
+    if cursor < start:
+        first_span = DateSpan(start=start, end=first_span.end)
+    spans[0] = first_span
+
+    last_span = spans[-1]
+    cursor = add_days(last_span.end, 1)
+    while cursor <= end and cursor.weekday() >= 5:
+        last_span = DateSpan(start=last_span.start, end=cursor)
+        cursor = add_days(cursor, 1)
+    if cursor > end:
+        last_span = DateSpan(start=last_span.start, end=end)
+    spans[-1] = last_span
+    return spans
 
 
-def _require_full_coverage(
-    *, symbol: str, data_type: str, start: date, end: date, seen: set[date]
+def _require_non_empty_coverage(
+    *, symbol: str, data_type: str, start: date, end: date, seen: list[date]
 ) -> None:
-    """Reject sparse chunk responses instead of marking gaps as covered."""
-    expected = {_add_days(start, offset) for offset in range((end - start).days + 1)}
-    if seen != expected:
-        missing = sorted(expected - seen)
-        first = missing[0].isoformat() if missing else start.isoformat()
-        label = "Daily" if data_type == "daily" else "Broker"
+    """Reject empty chunk responses; non-trading-day gaps are valid.
+
+    Responses are sorted chronologically and verified for bounds and duplicates
+    during row normalization.
+    """
+    label = "Daily" if data_type == "daily" else "Broker"
+    if not seen:
         raise SectorsSchemaError(
             f"{label} response for {symbol} has incomplete coverage: "
-            f"missing {len(missing)} date(s) starting {first}"
+            f"no rows between {start.isoformat()} and {end.isoformat()}"
         )
+
 
 
 def _chunk_span(span: DateSpan, max_days: int) -> list[DateSpan]:
@@ -53,9 +101,9 @@ def _chunk_span(span: DateSpan, max_days: int) -> list[DateSpan]:
     chunks: list[DateSpan] = []
     cursor = span.start
     while cursor <= span.end:
-        chunk_end = min(_add_days(cursor, max_days - 1), span.end)
+        chunk_end = min(add_days(cursor, max_days - 1), span.end)
         chunks.append(DateSpan(start=cursor, end=chunk_end))
-        cursor = _add_days(chunk_end, 1)
+        cursor = add_days(chunk_end, 1)
     return chunks
 
 
@@ -246,9 +294,11 @@ def _execute_plan(
         )
         if chunk.data_type == "daily":
             bars = client.fetch_daily_bars(chunk.symbol, chunk.start, chunk.end)
+            sorted_bars = sorted(bars, key=lambda bar: bar.date)
             rows: list[dict] = []
+            seen_dates: list[date] = []
             seen: set[date] = set()
-            for bar in bars:
+            for bar in sorted_bars:
                 if bar.symbol.removesuffix(".JK").upper() != chunk.symbol.upper():
                     raise SectorsSchemaError(
                         f"Daily response symbol does not match requested symbol {chunk.symbol}"
@@ -262,6 +312,7 @@ def _execute_plan(
                         f"Daily response for {chunk.symbol} has duplicate date {bar.date.isoformat()}"
                     )
                 seen.add(bar.date)
+                seen_dates.append(bar.date)
                 rows.append(
                     CachedDailyBar(
                         symbol=chunk.symbol,
@@ -275,19 +326,20 @@ def _execute_plan(
                         provenance=provenance,
                     ).model_dump(mode="json")
                 )
-            _require_full_coverage(
+            _require_non_empty_coverage(
                 symbol=chunk.symbol,
                 data_type="daily",
                 start=chunk.start,
                 end=chunk.end,
-                seen=seen,
+                seen=seen_dates,
             )
+            covered_spans = _covered_spans_for_chunk(chunk.start, chunk.end, seen_dates)
             write_cache(
                 chunk.symbol,
                 "daily",
                 cache_dir,
                 rows,
-                [DateSpan(start=chunk.start, end=chunk.end)],
+                covered_spans,
             )
         else:
             broker = client.fetch_broker_summary(chunk.symbol, chunk.start, chunk.end)
@@ -299,9 +351,11 @@ def _execute_plan(
                 raise SectorsSchemaError(
                     f"Broker response range does not match requested range for {chunk.symbol}"
                 )
+            sorted_days = sorted(broker.data, key=lambda day: day.date)
             rows = []
             seen = set()
-            for day in broker.data:
+            seen_dates: list[date] = []
+            for day in sorted_days:
                 if broker.symbol.removesuffix(".JK").upper() != chunk.symbol.upper():
                     raise SectorsSchemaError(
                         f"Broker response symbol does not match requested symbol {chunk.symbol}"
@@ -315,6 +369,7 @@ def _execute_plan(
                         f"Broker response for {chunk.symbol} has duplicate date {day.date.isoformat()}"
                     )
                 seen.add(day.date)
+                seen_dates.append(day.date)
                 rows.append(
                     CachedBrokerSummaryDay(
                         symbol=chunk.symbol,
@@ -323,19 +378,20 @@ def _execute_plan(
                         provenance=provenance,
                     ).model_dump(mode="json")
                 )
-            _require_full_coverage(
+            _require_non_empty_coverage(
                 symbol=chunk.symbol,
                 data_type="broker",
                 start=chunk.start,
                 end=chunk.end,
-                seen=seen,
+                seen=seen_dates,
             )
+            covered_spans = _covered_spans_for_chunk(chunk.start, chunk.end, seen_dates)
             write_cache(
                 chunk.symbol,
                 "broker",
                 cache_dir,
                 rows,
-                [DateSpan(start=chunk.start, end=chunk.end)],
+                covered_spans,
             )
         credits_spent += chunk.estimated_credits
         log_stage(

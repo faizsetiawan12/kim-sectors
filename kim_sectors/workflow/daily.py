@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from logging import Logger
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from ..dates import add_days
 from ..market_data.base import SectorsMarketData, SyncMarketData
 from ..market_data.cache import read_cache
 from ..market_data.errors import CacheError
@@ -36,10 +37,6 @@ class DailyRunReport(StrictModel):
     status: str = "ok"
     artifact_paths: list[str]
     notify_status: str  # "sent" | "skipped"
-
-
-def _add_days(value: date, days: int) -> date:
-    return value + timedelta(days=days)
 
 
 def _latest_retrieved_at(cache_dir: Path, symbols: list[str]) -> datetime | None:
@@ -92,7 +89,7 @@ def run_daily(
         raise ValueError("--market-date cannot be in the future")
 
     if fetch:
-        start = _add_days(market_date, -SYNC_SPAN_DAYS)
+        start = add_days(market_date, -SYNC_SPAN_DAYS)
         sync_cache(
             client,
             index=index,
