@@ -3,54 +3,14 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal, InvalidOperation
 from logging import Logger
 from pathlib import Path
 
-from ..market_data.cache import load_universe_membership_records, read_cache
 from ..market_data.errors import CacheError
-from ..market_data.models import UniverseMembership
 from ..observability import log_stage
+from .cache_access import load_closes, select_membership
 from .models import IneligibleCandidate, RankedCandidate, RankReport
 from .momentum import momentum_return
-
-
-def _select_membership(index: str, market_date: date, cache_dir: Path) -> UniverseMembership:
-    records = load_universe_membership_records(index, cache_dir)
-    if not records:
-        raise CacheError(
-            f"Universe '{index}' has no cached membership; run sync-cache --fetch first"
-        )
-    applicable = [r for r in records if r.effective_date <= market_date]
-    if not applicable:
-        earliest = min(r.effective_date for r in records).isoformat()
-        raise CacheError(
-            f"No universe membership effective on or before {market_date.isoformat()} "
-            f"(earliest {earliest})"
-        )
-    return max(applicable, key=lambda r: (r.effective_date, r.resolved_at))
-
-
-def _load_closes(
-    symbol: str, cache_dir: Path, market_date: date
-) -> list[tuple[date, Decimal, str]]:
-    rows, _ = read_cache(symbol, "daily", cache_dir)
-    closes: list[tuple[date, Decimal, str]] = []
-    for row in rows:
-        try:
-            day = date.fromisoformat(str(row.get("date")))
-        except (ValueError, TypeError):
-            raise CacheError(f"Cached daily row for {symbol} has an invalid price")
-        if day > market_date:
-            continue
-        try:
-            raw_close = str(row.get("close"))
-            close = Decimal(raw_close)
-        except (ValueError, InvalidOperation, TypeError, ArithmeticError):
-            raise CacheError(f"Cached daily row for {symbol} has an invalid price")
-        closes.append((day, close, raw_close))
-    closes.sort(key=lambda item: item[0])
-    return closes
 
 
 def rank_momentum(
@@ -76,7 +36,7 @@ def rank_momentum(
     if market_date > today:
         raise ValueError("--market-date cannot be in the future")
 
-    membership = _select_membership(index, market_date, cache_dir)
+    membership = select_membership(index, market_date, cache_dir)
     log_stage(
         logger,
         "universe",
@@ -102,7 +62,7 @@ def rank_momentum(
 
     for symbol in membership.symbols:
         try:
-            on_or_before = _load_closes(symbol, cache_dir, market_date)
+            on_or_before = load_closes(symbol, cache_dir, market_date)
         except CacheError as error:
             mark_ineligible(symbol, str(error))
             continue

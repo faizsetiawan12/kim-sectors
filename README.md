@@ -100,6 +100,33 @@ used, so a later membership change does not rewrite history. Prices after
 Exit codes: `0` success, `1` unexpected/cache failure (including missing
 universe membership or a future market date).
 
+### `signal`
+
+Rank the cached LQ45 universe by the composite `Momentum × Broker EV` signal.
+Reads only validated Data Cache records, never the network. Momentum uses the
+same trailing return as `rank` (`--lookback` default 21). Broker EV is raw
+next-day expected value estimated from historical broker-summary observation
+dates whose next-session outcome is observable by `--market-date`
+(next close on or before the signal date, so delayed outcomes are excluded),
+with no winsorization: `p × reward-risk − (1 − p)` where `p` is win probability
+and reward-risk is average gain over average loss.
+
+```bash
+python main.py signal --market-date 2026-08-15 [--lookback 21] [--min-samples 5]
+```
+
+Eligible candidates expose symbol, momentum, sample count, win probability,
+average gain/loss, reward-risk ratio, raw EV, signal score, and supporting
+price fields, sorted highest to lowest signal (ties break by symbol). Missing,
+invalid, infinite (e.g. no losses), and under-sampled factors are listed under
+`ineligible_reasons` with explicit reasons instead of silent zeros. The top
+candidate is highlighted under `highlight` as research and decision support
+only, without a buy or sell instruction. Prices after `--market-date` are
+ignored.
+
+Exit codes: `0` success, `1` unexpected/cache failure (including missing
+universe membership, a future market date, or invalid lookback/min-samples).
+
 ## Planned commands
 
 ```bash

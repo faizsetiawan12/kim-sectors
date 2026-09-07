@@ -25,7 +25,12 @@ from kim_sectors.market_data import (
 )
 from kim_sectors.observability import configure_logging, log_stage
 from kim_sectors.paths import ensure_dirs
-from kim_sectors.strategy import DEFAULT_MOMENTUM_LOOKBACK, rank_momentum
+from kim_sectors.strategy import (
+    DEFAULT_MIN_SAMPLES,
+    DEFAULT_MOMENTUM_LOOKBACK,
+    rank_momentum,
+    rank_signal,
+)
 
 EXIT_UNEXPECTED = 1
 EXIT_AUTH = 2
@@ -47,6 +52,12 @@ def _parser() -> argparse.ArgumentParser:
     rank = commands.add_parser("rank", help="rank universe by trailing momentum from cache")
     rank.add_argument("--market-date", required=True, type=date.fromisoformat)
     rank.add_argument("--lookback", type=int, default=DEFAULT_MOMENTUM_LOOKBACK)
+    signal = commands.add_parser(
+        "signal", help="rank universe by Momentum x Broker EV from cache"
+    )
+    signal.add_argument("--market-date", required=True, type=date.fromisoformat)
+    signal.add_argument("--lookback", type=int, default=DEFAULT_MOMENTUM_LOOKBACK)
+    signal.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
     return parser
 
 
@@ -106,6 +117,16 @@ def main(
 
     if args.command == "rank":
         return _run_rank(
+            config,
+            args,
+            stdout=stdout,
+            stderr=stderr,
+            timezone=timezone,
+            today=today() if today else _today(timezone),
+        )
+
+    if args.command == "signal":
+        return _run_signal(
             config,
             args,
             stdout=stdout,
@@ -251,6 +272,45 @@ def _run_rank(
             index=config.kim_sectors_universe_index,
             market_date=args.market_date,
             lookback=args.lookback,
+            cache_dir=config.kim_sectors_cache_dir,
+            logger=logger,
+            today=today,
+        )
+        if report.status != "ok":
+            return EXIT_UNEXPECTED
+        return 0
+    except (CacheError, MarketDataError, ValueError) as error:
+        print(f"error: {error}", file=stderr)
+        return EXIT_UNEXPECTED
+
+
+def _run_signal(
+    config: SectorsConfig,
+    args: argparse.Namespace,
+    *,
+    stdout: TextIO,
+    stderr: TextIO,
+    timezone: ZoneInfo,
+    today: date,
+) -> int:
+    """Execute the signal command over validated cache records only."""
+    if args.lookback < 1:
+        print("error: --lookback must be >= 1", file=stderr)
+        return EXIT_UNEXPECTED
+    if args.min_samples < 1:
+        print("error: --min-samples must be >= 1", file=stderr)
+        return EXIT_UNEXPECTED
+    if args.market_date > today:
+        print("error: --market-date cannot be in the future", file=stderr)
+        return EXIT_UNEXPECTED
+
+    logger = configure_logging(stdout, timezone, event="sector_signal_stage", name="kim_sectors.signal")
+    try:
+        report = rank_signal(
+            index=config.kim_sectors_universe_index,
+            market_date=args.market_date,
+            lookback=args.lookback,
+            min_samples=args.min_samples,
             cache_dir=config.kim_sectors_cache_dir,
             logger=logger,
             today=today,
