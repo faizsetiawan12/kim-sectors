@@ -17,6 +17,7 @@ class RankedCandidate(StrictModel):
     momentum: float
     start_date: date
     end_date: date
+    # Raw cache strings (Decimal dumps as string in JSON) to preserve audit values.
     start_close: str
     end_close: str
     lookback: int = Field(ge=1)
@@ -30,6 +31,7 @@ class IneligibleCandidate(StrictModel):
 
 
 class RankReport(StrictModel):
+    # mode/status mirror SyncReport for a consistent workflow contract.
     mode: str
     index: str
     market_date: date
