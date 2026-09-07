@@ -26,7 +26,7 @@ def test_live_sectors_contract_is_bounded():
     Spends at most 2 credits: 1 daily bar request and 1 broker summary request.
     Validates authentication, response schema, and field types against live endpoints.
     """
-    if os.getenv("RUN_LIVE_SECTORS") != "1" and os.getenv("KIM_SECTORS_RUN_LIVE") != "1":
+    if os.getenv("RUN_LIVE_SECTORS") != "1":
         pytest.skip("Skipping live Sectors contract test: set RUN_LIVE_SECTORS=1 to opt in.")
 
     api_key = os.getenv("SECTORS_API_KEY")

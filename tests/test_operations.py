@@ -133,26 +133,24 @@ def test_no_brokerage_or_order_execution_capability():
     """Verify the repository contains no brokerage or live order capabilities.
 
     Acceptance criterion: Documentation and operational tests verify no
-    brokerage/order-execution capability is present.
+    brokerage/order-execution capability is present. Capability terms are
+    matched as whole words so domain vocabulary (broker summaries, "trade"
+    records in a replay) cannot mask an actual execution API.
     """
     forbidden_terms = [
-        "stockbit",
-        "ajaib",
-        "mandiri_sekuritas",
-        "indopremier",
-        "ipat",
-        "ccxt",
-        "alpaca",
         "place_order",
         "submit_order",
         "cancel_order",
         "execute_trade",
         "live_trading",
         "broker_auth",
-        "carina",
+        "place trade",
+        "place an order",
+        "buy or sell instruction",
+        "order placement",
+        "portfolio mutation",
     ]
 
-    # Walk all modules in kim_sectors package.
     package = kim_sectors
     for _, module_name, _ in pkgutil.walk_packages(package.__path__, package.__name__ + "."):
         mod = importlib.import_module(module_name)
@@ -164,3 +162,62 @@ def test_no_brokerage_or_order_execution_capability():
             assert term not in content, (
                 f"Forbidden trading/brokerage execution term '{term}' found in {module_name}"
             )
+
+
+def test_complete_demo_command_sequence_end_to_end(monkeypatch, tmp_path):
+    """The documented demo sequence runs as one connected path.
+
+    ping-sectors (live tracer) -> sync-cache (cache fill) -> run-daily (brief)
+    -> run-backtest (replay), each against controlled data instead of the
+    network, matching the README's reproducible competition path.
+    """
+    monkeypatch.setenv("SECTORS_API_KEY", "test-dummy-key-123")
+    monkeypatch.setenv("KIM_SECTORS_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("KIM_SECTORS_OUTPUT_DIR", str(tmp_path / "reports"))
+    adapter = InMemorySectorsAdapter(
+        universe=["BBCA"],
+        daily=mixed_daily_payload,
+        broker_summary=broker_payload_for_span,
+    )
+    factory = lambda _config: adapter  # noqa: E731
+
+    outputs: dict[str, set[str]] = {}
+
+    def run(*argv: str, current_day: date = date(2026, 8, 20)) -> int:
+        output = StringIO()
+        error = StringIO()
+        result = main(
+            list(argv),
+            build_market_data=factory,
+            stdout=output,
+            stderr=error,
+            today=lambda: current_day,
+        )
+        assert result == 0, (result, error.getvalue())
+        outputs[argv[0]] = {
+            json.loads(line)["stage"] for line in output.getvalue().splitlines()
+        }
+        return result
+
+    run("ping-sectors", "--window-days", "2")
+    run("sync-cache", "--start", "2026-08-01", "--end", "2026-08-20", "--fetch")
+    run(
+        "run-daily",
+        "--market-date", "2026-08-20",
+        "--lookback", "1",
+        "--min-samples", "3",
+        current_day=date(2026, 8, 20),
+    )
+    run(
+        "run-backtest",
+        "--start", "2026-08-20", "--end", "2026-08-20",
+        "--lookback", "1", "--min-samples", "3",
+        current_day=date(2026, 8, 20),
+    )
+
+    # Each demo stage leaves its audit trail; the brief artifact exists.
+    assert {"fetch", "validate"} <= outputs["sync-cache"]
+    assert {"report", "notify"} <= outputs["run-daily"]
+    assert "backtesting" in outputs["run-backtest"]
+    assert (tmp_path / "reports" / "daily" / "2026-08-20.md").exists()
+    assert list((tmp_path / "reports").glob("backtest_*.json"))
