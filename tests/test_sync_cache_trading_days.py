@@ -142,6 +142,49 @@ def test_sync_cache_does_not_overstate_partial_daily_coverage(monkeypatch, tmp_p
     assert daily["covered_spans"] == [{"start": "2026-08-03", "end": "2026-08-04"}]
 
 
+def test_sync_cache_does_not_overstate_interior_daily_gap(monkeypatch, tmp_path):
+    # A missing weekday between returned rows must remain fetchable.
+    adapter = InMemorySectorsAdapter(
+        universe=["BBCA"],
+        daily=lambda symbol, start, end: [
+            {
+                "symbol": symbol,
+                "date": day.isoformat(),
+                "close": 9400.0,
+                "open": 9350.0,
+                "high": 9450.0,
+                "low": 9300.0,
+                "volume": 1000000,
+                "market_cap": 100000000000.0,
+            }
+            for day in (date(2026, 8, 3), date(2026, 8, 7))
+        ],
+        broker_summary=lambda symbol, start, end: {
+            **broker_summary_payload(symbol, start=start, end=end),
+            "data": [
+                {"date": date(2026, 8, 3).isoformat(), "summary": []},
+                {"date": date(2026, 8, 7).isoformat(), "summary": []},
+            ],
+        },
+    )
+    monkeypatch.setenv("SECTORS_API_KEY", "test-dummy-key-123")
+    monkeypatch.setenv("KIM_SECTORS_CACHE_DIR", str(tmp_path / "cache"))
+    error = StringIO()
+    assert main(
+        ["sync-cache", "--start", "2026-08-03", "--end", "2026-08-07", "--fetch"],
+        build_market_data=lambda _config: adapter,
+        stdout=StringIO(),
+        stderr=error,
+        today=lambda: date(2026, 9, 2),
+    ) == 0
+
+    daily = json.loads((tmp_path / "cache" / "daily" / "BBCA.json").read_text())
+    assert daily["covered_spans"] == [
+        {"start": "2026-08-03", "end": "2026-08-03"},
+        {"start": "2026-08-07", "end": "2026-08-07"},
+    ]
+
+
 def test_sync_cache_fetch_normalizes_out_of_order_broker_days(monkeypatch, tmp_path):
     adapter = market_days_adapter(["BBCA"])
     raw_broker = adapter._broker_summary

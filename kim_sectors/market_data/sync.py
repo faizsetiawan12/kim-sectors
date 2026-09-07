@@ -42,29 +42,44 @@ def _covered_spans_for_chunk(
     if not seen_dates:
         return []
     sorted_dates = sorted(seen_dates)
-    first_date = sorted_dates[0]
-    last_date = sorted_dates[-1]
+    spans: list[DateSpan] = []
+    span_start = sorted_dates[0]
+    previous = sorted_dates[0]
+    for current in sorted_dates[1:]:
+        gap_days = [
+            add_days(previous, offset)
+            for offset in range(1, (current - previous).days)
+        ]
+        weekday_gap = sum(day.weekday() < 5 for day in gap_days)
+        if weekday_gap > 1:
+            spans.append(DateSpan(start=span_start, end=previous))
+            span_start = current
+        previous = current
+    spans.append(DateSpan(start=span_start, end=previous))
 
-    span_start = first_date
-    cursor = add_days(first_date, -1)
+    # A response at a chunk boundary can omit only weekend days. Keep those
+    # days covered, while leaving missing weekdays to a later synchronization.
+    first_span = spans[0]
+    cursor = add_days(first_span.start, -1)
     while cursor >= start and cursor.weekday() >= 5:
-        span_start = cursor
+        first_span = DateSpan(start=cursor, end=first_span.end)
         cursor = add_days(cursor, -1)
     if cursor < start:
-        span_start = start
+        first_span = DateSpan(start=start, end=first_span.end)
+    spans[0] = first_span
 
-    span_end = last_date
-    cursor = add_days(last_date, 1)
+    last_span = spans[-1]
+    cursor = add_days(last_span.end, 1)
     while cursor <= end and cursor.weekday() >= 5:
-        span_end = cursor
+        last_span = DateSpan(start=last_span.start, end=cursor)
         cursor = add_days(cursor, 1)
     if cursor > end:
-        span_end = end
+        last_span = DateSpan(start=last_span.start, end=end)
+    spans[-1] = last_span
+    return spans
 
-    return [DateSpan(start=span_start, end=span_end)]
 
-
-def _require_full_coverage(
+def _require_non_empty_coverage(
     *, symbol: str, data_type: str, start: date, end: date, seen: list[date]
 ) -> None:
     """Reject empty chunk responses; non-trading-day gaps are valid.
@@ -78,6 +93,7 @@ def _require_full_coverage(
             f"{label} response for {symbol} has incomplete coverage: "
             f"no rows between {start.isoformat()} and {end.isoformat()}"
         )
+
 
 
 def _chunk_span(span: DateSpan, max_days: int) -> list[DateSpan]:
@@ -310,7 +326,7 @@ def _execute_plan(
                         provenance=provenance,
                     ).model_dump(mode="json")
                 )
-            _require_full_coverage(
+            _require_non_empty_coverage(
                 symbol=chunk.symbol,
                 data_type="daily",
                 start=chunk.start,
@@ -362,7 +378,7 @@ def _execute_plan(
                         provenance=provenance,
                     ).model_dump(mode="json")
                 )
-            _require_full_coverage(
+            _require_non_empty_coverage(
                 symbol=chunk.symbol,
                 data_type="broker",
                 start=chunk.start,
