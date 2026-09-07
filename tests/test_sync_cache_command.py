@@ -12,6 +12,9 @@ from .support import broker_summary_payload, daily_bars_payload
 
 
 def make_adapter(symbols: list[str]) -> InMemorySectorsAdapter:
+    def _all_days(start, end):
+        return [date.fromordinal(start.toordinal() + day) for day in range((end - start).days + 1)]
+
     return InMemorySectorsAdapter(
         universe=symbols,
         daily=lambda symbol, start, end: daily_bars_payload(symbol, start=start, end=end),
@@ -22,7 +25,7 @@ def make_adapter(symbols: list[str]) -> InMemorySectorsAdapter:
                     "date": day.isoformat(),
                     "summary": [],
                 }
-                for day in [start, end]
+                for day in _all_days(start, end)
             ],
         },
     )

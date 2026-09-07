@@ -33,6 +33,21 @@ def _add_days(value: date, days: int) -> date:
     return date.fromordinal(value.toordinal() + days)
 
 
+def _require_full_coverage(
+    *, symbol: str, data_type: str, start: date, end: date, seen: set[date]
+) -> None:
+    """Reject sparse chunk responses instead of marking gaps as covered."""
+    expected = {_add_days(start, offset) for offset in range((end - start).days + 1)}
+    if seen != expected:
+        missing = sorted(expected - seen)
+        first = missing[0].isoformat() if missing else start.isoformat()
+        label = "Daily" if data_type == "daily" else "Broker"
+        raise SectorsSchemaError(
+            f"{label} response for {symbol} has incomplete coverage: "
+            f"missing {len(missing)} date(s) starting {first}"
+        )
+
+
 def _chunk_span(span: DateSpan, max_days: int) -> list[DateSpan]:
     """Split an inclusive span into consecutive sub-spans of at most *max_days*."""
     chunks: list[DateSpan] = []
@@ -260,6 +275,13 @@ def _execute_plan(
                         provenance=provenance,
                     ).model_dump(mode="json")
                 )
+            _require_full_coverage(
+                symbol=chunk.symbol,
+                data_type="daily",
+                start=chunk.start,
+                end=chunk.end,
+                seen=seen,
+            )
             write_cache(
                 chunk.symbol,
                 "daily",
@@ -301,6 +323,13 @@ def _execute_plan(
                         provenance=provenance,
                     ).model_dump(mode="json")
                 )
+            _require_full_coverage(
+                symbol=chunk.symbol,
+                data_type="broker",
+                start=chunk.start,
+                end=chunk.end,
+                seen=seen,
+            )
             write_cache(
                 chunk.symbol,
                 "broker",
