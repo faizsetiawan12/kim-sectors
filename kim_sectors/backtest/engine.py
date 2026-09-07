@@ -10,7 +10,7 @@ portfolio, and trades execute at the next eligible market session close.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from logging import Logger
 from pathlib import Path
@@ -22,6 +22,7 @@ from ..observability import log_stage
 from ..strategy.cache_access import select_membership
 from ..strategy.models import SignalCandidate, SignalReport
 from ..strategy.signal import rank_signal
+from ..market_data.models import DateSpan, UniverseMembership
 from .coverage import check_coverage
 from .models import (
     BacktestConfig,
@@ -118,12 +119,59 @@ def _target_symbols(
     active_symbols: set[str],
     top_k: int,
 ) -> list[str]:
-    """Return the top-k candidates that remain in the active universe."""
     return [
         candidate.symbol
         for candidate in candidates
         if candidate.symbol in active_symbols
     ][:top_k]
+
+
+def _tenure_windows(
+    *,
+    start: date,
+    end: date,
+    lookback: int,
+    memberships: list[UniverseMembership],
+) -> tuple[dict[str, list[DateSpan]], dict[str, list[DateSpan]]]:
+    """Return daily and broker coverage windows for active membership tenures."""
+    ordered = sorted(memberships, key=lambda item: item.effective_date)
+    effective_dates = sorted({item.effective_date for item in ordered})
+    active: dict[str, list[tuple[date, date]]] = {}
+    for position, effective_date in enumerate(effective_dates):
+        tenure_end = (
+            effective_dates[position + 1] - timedelta(days=1)
+            if position + 1 < len(effective_dates)
+            else end
+        )
+        tenure_start = max(start, effective_date)
+        tenure_end = min(end, tenure_end)
+        if tenure_start > tenure_end:
+            continue
+        snapshot = max(
+            (item for item in ordered if item.effective_date == effective_date),
+            key=lambda item: item.resolved_at,
+        )
+        for symbol in snapshot.symbols:
+            active.setdefault(symbol, []).append((tenure_start, tenure_end))
+
+    daily: dict[str, list[DateSpan]] = {}
+    broker: dict[str, list[DateSpan]] = {}
+    for symbol, tenures in active.items():
+        first_active = min(start_date for start_date, _ in tenures)
+        last_active = max(end_date for _, end_date in tenures)
+        daily[symbol] = [
+            DateSpan(
+                start=max(start, first_active - timedelta(days=lookback)),
+                end=min(end, last_active + timedelta(days=1)),
+            )
+        ]
+        broker[symbol] = [
+            DateSpan(
+                start=max(start, first_active - timedelta(days=lookback + 1)),
+                end=last_active,
+            )
+        ]
+    return daily, broker
 
 
 def _compute_metrics(
@@ -239,8 +287,20 @@ def run_backtest(
         members=len(symbols),
     )
 
+    daily_windows, broker_windows = _tenure_windows(
+        start=start,
+        end=end,
+        lookback=lookback,
+        memberships=memberships,
+    )
     coverage = check_coverage(
-        symbols=symbols, start=start, end=end, cache_dir=cache_dir, logger=logger
+        symbols=symbols,
+        start=start,
+        end=end,
+        cache_dir=cache_dir,
+        logger=logger,
+        daily_windows=daily_windows,
+        broker_windows=broker_windows,
     )
     config = BacktestConfig(
         universe=index,

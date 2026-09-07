@@ -248,12 +248,16 @@ refuses to calculate over gaps.
 
 The replay is point-in-time: at each rebalance date `T` the composite signal
 uses only data observable by `T` (broker EV outcomes whose next session close
-is on or before `T`), matching the `signal` command. End-of-day signals enter
-at the next eligible market session close, never earlier; the entry price and
-timing are recorded per trade. The universe is fixed to the membership
-snapshot effective on or before `--start`. If a target symbol has no close on
-the entry session its entry is skipped and recorded. When a rebalance produces
-no eligible candidates the portfolio liquidates to cash. Final equity is marked
+is on or before `T`), matching the `signal` command. Membership is also
+point-in-time: the cached universe snapshot effective at each rebalance date
+sets the active candidates, so additions and removals reconstitute the target
+portfolio dynamically. Cache coverage is required only during each symbol's
+active membership tenure, plus the lookback and outcome history needed by its
+signals. End-of-day signals enter at the next eligible market session close,
+never earlier; the entry price and timing are recorded per trade. If a target
+symbol has no close on the entry session its entry is skipped and recorded.
+When a rebalance produces no eligible candidates the portfolio liquidates to
+cash. Final equity is marked
 to the close of the last session in the window; no terminal liquidation cost is
 assumed.
 
