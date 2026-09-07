@@ -6,28 +6,89 @@ KIM Sectors is a decision-support workflow for the Sectors Hackathon 2026 **Auto
 
 > Research and decision support only. KIM Sectors does not place or execute trades.
 
-## Planned workflow
+## Problem and solution
 
-1. Fetch live Sectors API data for the LQ45 universe.
-2. Validate and cache market and broker data locally.
-3. Calculate monthly price momentum and broker-summary expected value.
-4. Rank candidates by the composite score.
-5. Generate a Markdown/JSON brief and send it to Telegram.
-6. Replay the same strategy over cached history with configurable backtest settings.
+Indonesian-equity investors spend time collecting prices and broker activity, repeating calculations, checking historical behavior, and preparing a daily decision brief. This workflow turns those steps into a repeatable, inspectable pipeline while leaving the investment decision with a human.
 
-## Status
+**Sectors Financial API v2** is the core market-data dependency. The default **LQ45 Universe** is resolved from Sectors and stored with an effective date. Current and historical daily bars plus broker summaries are validated, normalized, and persisted in the local **Data Cache** (`data/cache/`). The cache is reused by later runs and backtests, so repeated research does not spend more API credits.
 
-Fresh project scaffold. Implementation will be added during the hackathon build period.
+The pipeline is:
 
-## Local setup
+1. Fetch Sectors data and resolve LQ45 membership.
+2. Validate response schemas and cache provenance.
+3. Calculate Momentum and Broker EV.
+4. Rank candidates and produce Markdown/JSON artifacts.
+5. Optionally notify Telegram.
+6. Replay the same point-in-time inputs with a Backtest Run.
+
+### Formula and human boundary
+
+Monthly Momentum is the trailing return over 21 available trading sessions:
+`(end_close / start_close) - 1`.
+
+Broker EV estimates raw next-day outcomes from historical broker-summary observations:
+`p × reward-risk − (1 − p)`.
+
+The composite Signal Score is:
+`Momentum × Broker EV`.
+
+Missing, invalid, infinite, or under-sampled factors are excluded with a reason. Outcomes are only used once observable at the relevant date; this prevents look-ahead bias. Rankings are research inputs, not buy/sell instructions. A human decides whether any further action is appropriate.
+
+## Demo, live data, and credit budget
+
+The reproducible demo path uses a controlled adapter in tests and the real Sectors path uses environment configuration. Never put credentials in README, source, reports, or Git:
 
 ```bash
-conda activate sekuritasmology
+conda activate kim-sectors
 cp .env.example .env
-# Add credentials to .env; never commit .env.
+# Set SECTORS_API_KEY in .env locally; do not commit .env
+python main.py ping-sectors --symbol BBCA --window-days 2
+python main.py run-daily --market-date 2026-08-15  # cached replay, zero credits
 ```
 
-The project requires Python 3.10+ and a Sectors API key. Telegram delivery is optional during local development and requires a bot token and destination chat/topic configuration.
+`ping-sectors` is the bounded live contract tracer: one daily request plus one broker-summary request, **2 API credits maximum**, with a 14-day window limit. It is the preferred live-data demo check. A larger `sync-cache --fetch` is always explicit and prints its estimated request cost first. Development was constrained to approximately **600 API credits**, so cache reuse, missing-span fetches, bounded windows, and explicit fetch flags are deliberate design choices. Backtest Run never calls Sectors and costs zero credits.
+
+## Recurring post-market operation
+
+Run the Daily Pipeline after IDX closes, Monday–Friday at **16:15 WIB** (`Asia/Jakarta`). This deployment-neutral cron entry uses the repository launcher:
+
+```cron
+CRON_TZ=Asia/Jakarta
+15 16 * * 1-5 /home/faiz/KIM/repos/kim-sectors/scripts/run_daily_cron.sh >> /home/faiz/KIM/repos/kim-sectors/output/logs/daily-cron.log 2>&1
+```
+
+The command is also directly runnable:
+
+```bash
+./scripts/run_daily_cron.sh
+```
+
+The launcher does not contain credentials and returns the pipeline exit code. Use `python main.py run-daily --market-date YYYY-MM-DD` for manual replay from the Data Cache.
+
+## Opt-in operational smoke checks
+
+Normal tests make no network calls and do not send Telegram messages. Live checks are explicitly separated:
+
+```bash
+# Normal suite: excludes both external-service smoke markers
+python -m pytest
+
+# Sectors contract check: bounded to at most 2 API credits
+RUN_LIVE_SECTORS=1 python -m pytest -m live tests/test_live_smoke.py
+
+# Telegram check: requires both values and sends one harmless message
+RUN_TELEGRAM_SMOKE=1 python -m pytest -m telegram tests/test_telegram_smoke.py
+```
+
+`SECTORS_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and the optional `TELEGRAM_MESSAGE_THREAD_ID` are read only from the local environment. Missing configuration causes an opt-in smoke test to skip; no smoke test runs accidentally.
+
+## Operational logs and limitations
+
+Each command emits one JSON object per line with a WIB timestamp and a stage. Depending on the command, stages include `fetch`, `validate`, `scoring`, `backtesting`, `report`, and `notify`, plus `complete`. Logs contain counts, dates, statuses, and error context, never API keys or Telegram bot tokens. The Data Cache remains local and must be backed up or refreshed deliberately. Sectors availability, market holidays, incomplete history, API quota, and Telegram availability can prevent a successful live run. The workflow is not a broker integration, does not authenticate to brokerage accounts, and has no order-placement, portfolio-mutation, or automated buy/sell capability.
+
+## Reproducible competition path
+
+For a clean judging/demo run: configure a local Sectors API key; run the bounded `ping-sectors` tracer; use `sync-cache --start ... --end ... --fetch` only for the historical span needed; run `run-daily` to create the Markdown/JSON brief and optionally deliver Telegram; then run `run-backtest` against the same validated cache. Show the structured logs, report artifacts, formula fields, credit estimate, and the explicit human decision boundary.
 
 ## Commands
 

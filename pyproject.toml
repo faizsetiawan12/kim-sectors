@@ -19,6 +19,8 @@ dev = ["pytest>=8"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not live and not telegram'"
 markers = [
   "live: makes live Sectors API requests and spends API credits",
+  "telegram: sends one opt-in Telegram smoke message",
 ]

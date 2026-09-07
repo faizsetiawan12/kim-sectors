@@ -208,6 +208,15 @@ def run_backtest(
         members=len(symbols),
         effective_date=membership.effective_date.isoformat(),
     )
+    log_stage(
+        logger,
+        "backtesting",
+        status="started",
+        index=index,
+        window_start=start.isoformat(),
+        window_end=end.isoformat(),
+        members=len(symbols),
+    )
 
     coverage = check_coverage(
         symbols=symbols, start=start, end=end, cache_dir=cache_dir, logger=logger

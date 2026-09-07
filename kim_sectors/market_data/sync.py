@@ -348,6 +348,14 @@ def _execute_plan(
             end=chunk.end.isoformat(),
             rows=len(rows),
         )
+        log_stage(
+            logger,
+            "validate",
+            status="ok",
+            symbol=chunk.symbol,
+            data_type=chunk.data_type,
+            rows=len(rows),
+        )
     return SyncReport(
         mode="fetch",
         index=plan.index,

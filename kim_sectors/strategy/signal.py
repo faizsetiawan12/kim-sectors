@@ -178,6 +178,16 @@ def rank_signal(
     eligible.sort(key=lambda c: (-c.signal_score, c.symbol))
     log_stage(
         logger,
+        "scoring",
+        status="ok",
+        market_date=market_date.isoformat(),
+        lookback=lookback,
+        min_samples=min_samples,
+        eligible=len(eligible),
+        ineligible=len(ineligible),
+    )
+    log_stage(
+        logger,
         "signal",
         status="ok",
         market_date=market_date.isoformat(),
