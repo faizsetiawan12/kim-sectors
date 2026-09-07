@@ -75,6 +75,31 @@ when the universe has not yet been resolved. Existing API authentication and
 request/schema exit codes remain: `0` success, `2` authentication, `3` schema,
 `4` request failure, and `1` unexpected/cache failure.
 
+### `rank`
+
+Rank the cached LQ45 universe by trailing monthly Momentum. Reads only
+validated Data Cache records, never the network. Momentum is
+`(end_close / start_close - 1)` where `end_close` is the close on
+`--market-date` and `start_close` is the close `--lookback` available trading
+sessions earlier (default 21, requiring 22 closes ending on the market date).
+Available sessions are counted, so weekend and
+holiday gaps are skipped without calendar-day math.
+
+```bash
+python main.py rank --market-date 2026-08-15 [--lookback 21]
+```
+
+Eligible candidates are sorted highest to lowest Momentum with symbol,
+market date, momentum, start/end dates, start/end closes, and lookback. Symbols
+with insufficient history, non-positive closes, or no price on the market date
+are listed under `ineligible_reasons` with human-readable reasons instead of a
+silent zero. The universe snapshot effective on or before `--market-date` is
+used, so a later membership change does not rewrite history. Prices after
+`--market-date` are ignored.
+
+Exit codes: `0` success, `1` unexpected/cache failure (including missing
+universe membership or a future market date).
+
 ## Planned commands
 
 ```bash
