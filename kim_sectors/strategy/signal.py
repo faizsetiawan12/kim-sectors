@@ -7,18 +7,37 @@ from logging import Logger
 from math import isfinite
 from pathlib import Path
 
+from decimal import Decimal, InvalidOperation
+
 from ..market_data.cache import read_cache
 from ..market_data.errors import CacheError
 from ..observability import log_stage
 from .broker_ev import broker_ev_stats, next_session_returns
-from .cache_access import load_closes, select_membership
+from .cache_access import load_momentum_window, select_membership
 from .models import IneligibleCandidate, SignalCandidate, SignalHighlight, SignalReport
 from .momentum import momentum_return
 
 HIGHLIGHT_NOTE = "For research and decision support only; not a buy or sell recommendation."
 
 
+def _qualifies_buy_activity(summary: list[dict]) -> bool:
+    """Return True when a broker summary shows broker-buying activity.
+
+    Qualification requires a positive total buy value (``bval``) or a
+    positive total buy lot (``blot``); net accumulation (``nval`` > 0) also
+    qualifies. Days with only sells or zero buy activity do not qualify.
+    """
+    try:
+        buy_value = sum((Decimal(str(row.get("bval", "0"))) for row in summary), Decimal("0"))
+        buy_lots = sum((int(row.get("blot", 0) or 0) for row in summary), 0)
+        net_value = sum((Decimal(str(row.get("nval", "0"))) for row in summary), Decimal("0"))
+    except (InvalidOperation, ValueError, TypeError, ArithmeticError):
+        return False
+    return buy_value > 0 or buy_lots > 0 or net_value > 0
+
+
 def _load_broker_dates(symbol: str, cache_dir: Path, market_date: date) -> set[date]:
+    """Return broker observation dates with qualifying broker-buy activity."""
     rows, _ = read_cache(symbol, "broker", cache_dir)
     dates: set[date] = set()
     for row in rows:
@@ -27,6 +46,9 @@ def _load_broker_dates(symbol: str, cache_dir: Path, market_date: date) -> set[d
         except (ValueError, TypeError):
             raise CacheError(f"Cached broker row for {symbol} has an invalid date")
         if day > market_date:
+            continue
+        summary = row.get("summary") or []
+        if not isinstance(summary, list) or not _qualifies_buy_activity(summary):
             continue
         dates.add(day)
     return dates
@@ -84,29 +106,14 @@ def rank_signal(
 
     for symbol in membership.symbols:
         try:
-            on_or_before = load_closes(symbol, cache_dir, market_date)
-        except CacheError as error:
+            window, on_or_before = load_momentum_window(
+                symbol, cache_dir, market_date, required
+            )
+        except (CacheError, ValueError) as error:
             mark_ineligible(symbol, str(error))
             continue
-        if not on_or_before or on_or_before[-1][0] != market_date:
-            mark_ineligible(symbol, f"no price on market date {market_date.isoformat()}")
-            continue
-        if len(on_or_before) < required:
-            mark_ineligible(
-                symbol,
-                f"insufficient history: need {required} closes on or before "
-                f"{market_date.isoformat()}, found {len(on_or_before)}",
-            )
-            continue
-        window = on_or_before[-required:]
         start_date, start_close, start_raw = window[0]
         end_date, end_close, end_raw = window[-1]
-        if start_close <= 0 or end_close <= 0:
-            bad_date = start_date if start_close <= 0 else end_date
-            mark_ineligible(
-                symbol, f"invalid price: non-positive close on {bad_date.isoformat()}"
-            )
-            continue
         try:
             momentum = momentum_return(start_close, end_close)
         except ValueError as error:

@@ -59,13 +59,34 @@ def seed_daily(cache_dir: Path, symbol: str, closes: list[tuple[date, str]]) -> 
     write_cache(symbol, "daily", cache_dir, rows, [DateSpan(start=closes[0][0], end=closes[-1][0])])
 
 
-def seed_broker(cache_dir: Path, symbol: str, days: list[date]) -> None:
+def seed_broker(
+    cache_dir: Path,
+    symbol: str,
+    days: list[date],
+    activity_by_day: dict[date, list[dict]] | None = None,
+) -> None:
     rows = []
+    default_activity = [
+        {
+            "broker_code": "MIR",
+            "bfreq": 1,
+            "blot": 1,
+            "bval": "100",
+            "bavg_per_share": "100",
+            "sfreq": 1,
+            "slot": 1,
+            "sval": "50",
+            "savg_per_share": "50",
+            "nlot": 1,
+            "nval": "50",
+            "navg_per_share": "50",
+        }
+    ]
     for day in days:
         row = CachedBrokerSummaryDay(
             symbol=symbol,
             date=day,
-            summary=[],
+            summary=(activity_by_day or {}).get(day, default_activity),
             provenance=Provenance(
                 source="sectors",
                 retrieved_at=datetime(2026, 9, 2, 16, 0, 0, tzinfo=ZoneInfo("Asia/Jakarta")),
@@ -506,6 +527,59 @@ def test_signal_rejects_invalid_args_and_missing_universe(monkeypatch, tmp_path)
     )
     assert code == 1
     assert "no cached membership" in err2.getvalue()
+
+
+def test_signal_excludes_non_buy_broker_days_from_ev_samples(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    seed_universe(cache_dir, ["BBCA"], date(2026, 8, 1))
+    seed_daily(
+        cache_dir,
+        "BBCA",
+        [
+            (date(2026, 8, 10), "100"),
+            (date(2026, 8, 11), "110"),
+            (date(2026, 8, 12), "99"),
+            (date(2026, 8, 13), "89.1"),
+        ],
+    )
+    sell_only = [
+        {
+            "broker_code": "MIR",
+            "bfreq": 1,
+            "blot": 0,
+            "bval": "0",
+            "bavg_per_share": None,
+            "sfreq": 1,
+            "slot": 1,
+            "sval": "100",
+            "savg_per_share": "100",
+            "nlot": -1,
+            "nval": "-100",
+            "navg_per_share": "100",
+        }
+    ]
+    seed_broker(
+        cache_dir,
+        "BBCA",
+        [date(2026, 8, 10), date(2026, 8, 11), date(2026, 8, 12)],
+        {date(2026, 8, 11): sell_only},
+    )
+
+    result, output, error = run_signal(
+        monkeypatch,
+        tmp_path,
+        "--market-date",
+        "2026-08-13",
+        "--lookback",
+        "1",
+        "--min-samples",
+        "2",
+    )
+
+    assert result == 0, error.getvalue()
+    complete = [json.loads(line) for line in output.getvalue().splitlines()][-1]
+    assert len(complete["candidates"]) == 1
+    assert complete["candidates"][0]["samples"] == 2
 
 
 def test_signal_marks_invalid_ev_history_ineligible(monkeypatch, tmp_path):

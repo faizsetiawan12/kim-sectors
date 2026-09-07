@@ -89,11 +89,27 @@ def seed_daily(cache_dir: Path, symbol: str, closes: list[tuple[date, str]]) -> 
 
 def seed_broker(cache_dir: Path, symbol: str, days: list[date]) -> None:
     rows = []
+    default_activity = [
+        {
+            "broker_code": "MIR",
+            "bfreq": 1,
+            "blot": 1,
+            "bval": "100",
+            "bavg_per_share": "100",
+            "sfreq": 1,
+            "slot": 1,
+            "sval": "50",
+            "savg_per_share": "50",
+            "nlot": 1,
+            "nval": "50",
+            "navg_per_share": "50",
+        }
+    ]
     for day in days:
         row = CachedBrokerSummaryDay(
             symbol=symbol,
             date=day,
-            summary=[],
+            summary=default_activity,
             provenance=Provenance(
                 source="sectors",
                 retrieved_at=datetime(2026, 9, 2, 16, 0, 0, tzinfo=ZoneInfo("Asia/Jakarta")),
@@ -148,7 +164,25 @@ def broker_payload_for_span(symbol: str, start: date, end: date) -> dict:
         "start": start.isoformat(),
         "end": end.isoformat(),
         "data": [
-            {"date": date.fromordinal(start.toordinal() + i).isoformat(), "summary": []}
+            {
+                "date": date.fromordinal(start.toordinal() + i).isoformat(),
+                "summary": [
+                    {
+                        "broker_code": "MIR",
+                        "bfreq": 1,
+                        "blot": 1,
+                        "bval": "100",
+                        "bavg_per_share": "100",
+                        "sfreq": 1,
+                        "slot": 1,
+                        "sval": "50",
+                        "savg_per_share": "50",
+                        "nlot": 1,
+                        "nval": "50",
+                        "navg_per_share": "50",
+                    }
+                ],
+            }
             for i in range((end - start).days + 1)
         ],
     }

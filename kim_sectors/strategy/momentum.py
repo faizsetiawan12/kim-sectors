@@ -16,5 +16,5 @@ def momentum_return(start_close: Decimal, end_close: Decimal) -> float:
         raise ValueError("momentum requires positive start and end closes")
     try:
         return float((end_close - start_close) / start_close)
-    except (InvalidOperation, DivisionByZeroError, ArithmeticError) as error:
+    except (ZeroDivisionError, InvalidOperation, ArithmeticError) as error:
         raise ValueError(f"momentum calculation failed: {error}") from error

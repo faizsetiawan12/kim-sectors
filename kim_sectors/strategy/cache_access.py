@@ -49,3 +49,32 @@ def load_closes(
         closes.append((day, close, raw_close))
     closes.sort(key=lambda item: item[0])
     return closes
+
+
+def load_momentum_window(
+    symbol: str, cache_dir: Path, market_date: date, required: int
+) -> tuple[list[tuple[date, Decimal, str]], list[tuple[date, Decimal, str]]]:
+    """Load closes and validate a momentum window ending on ``market_date``.
+
+    Returns the validated window of ``required`` closes ending on
+    ``market_date`` together with the full history on or before
+    ``market_date``. Raises ``CacheError`` for cache failures and
+    ``ValueError`` for window validation failures (missing market-date close,
+    insufficient history, or non-positive endpoints) so callers can turn
+    these into explicit ineligibility reasons.
+    """
+    history = load_closes(symbol, cache_dir, market_date)
+    if not history or history[-1][0] != market_date:
+        raise ValueError(f"no price on market date {market_date.isoformat()}")
+    if len(history) < required:
+        raise ValueError(
+            f"insufficient history: need {required} closes on or before "
+            f"{market_date.isoformat()}, found {len(history)}"
+        )
+    window = history[-required:]
+    start_date, start_close, _ = window[0]
+    end_date, end_close, _ = window[-1]
+    if start_close <= 0 or end_close <= 0:
+        bad_date = start_date if start_close <= 0 else end_date
+        raise ValueError(f"invalid price: non-positive close on {bad_date.isoformat()}")
+    return window, history

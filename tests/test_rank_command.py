@@ -138,6 +138,25 @@ def test_rank_marks_insufficient_history_ineligible(monkeypatch, tmp_path):
     assert "insufficient history" in reason["reason"]
 
 
+def test_rank_marks_zero_start_price_ineligible_without_crashing(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    seed_universe(cache_dir, ["BBCA"], date(2026, 8, 1))
+    seed_daily(
+        cache_dir,
+        "BBCA",
+        [(date(2026, 8, 12), "0"), (date(2026, 8, 13), "110")],
+    )
+
+    result, output, error = run_rank(
+        monkeypatch, tmp_path, "--market-date", "2026-08-13", "--lookback", "1"
+    )
+
+    assert result == 0, error.getvalue()
+    complete = [json.loads(line) for line in output.getvalue().splitlines()][-1]
+    assert complete["candidates"] == []
+    assert "invalid price" in complete["ineligible_reasons"][0]["reason"]
+
+
 def test_rank_marks_invalid_price_ineligible(monkeypatch, tmp_path):
     cache_dir = tmp_path / "cache"
     seed_universe(cache_dir, ["BBCA"], date(2026, 8, 1))
