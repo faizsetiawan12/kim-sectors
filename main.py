@@ -31,6 +31,11 @@ from kim_sectors.backtest import (
     run_backtest,
 )
 from kim_sectors.observability import configure_logging, log_stage
+from kim_sectors.outputs.telegram import (
+    TelegramDeliveryError,
+    TelegramHttpSender,
+    TelegramSender,
+)
 from kim_sectors.paths import ensure_dirs
 from kim_sectors.strategy import (
     DEFAULT_MIN_SAMPLES,
@@ -38,11 +43,13 @@ from kim_sectors.strategy import (
     rank_momentum,
     rank_signal,
 )
+from kim_sectors.workflow import run_daily
 
 EXIT_UNEXPECTED = 1
 EXIT_AUTH = 2
 EXIT_SCHEMA = 3
 EXIT_REQUEST = 4
+EXIT_TELEGRAM = 5
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -65,6 +72,12 @@ def _parser() -> argparse.ArgumentParser:
     signal.add_argument("--market-date", required=True, type=date.fromisoformat)
     signal.add_argument("--lookback", type=int, default=DEFAULT_MOMENTUM_LOOKBACK)
     signal.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
+    daily = commands.add_parser(
+        "run-daily", help="run the post-market LQ45 pipeline and deliver the daily brief"
+    )
+    daily.add_argument("--market-date", type=date.fromisoformat, default=None)
+    daily.add_argument("--lookback", type=int, default=DEFAULT_MOMENTUM_LOOKBACK)
+    daily.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
     backtest = commands.add_parser(
         "run-backtest", help="replay Momentum x Broker EV over cached history"
     )
@@ -74,9 +87,7 @@ def _parser() -> argparse.ArgumentParser:
     backtest.add_argument("--lookback", type=int, default=DEFAULT_MOMENTUM_LOOKBACK)
     backtest.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
     backtest.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
-    backtest.add_argument(
-        "--rebalance-sessions", type=int, default=DEFAULT_REBALANCE_SESSIONS
-    )
+    backtest.add_argument("--rebalance-sessions", type=int, default=DEFAULT_REBALANCE_SESSIONS)
     backtest.add_argument("--cost-bps", type=int, default=DEFAULT_COST_BPS)
     backtest.add_argument("--slippage-bps", type=int, default=DEFAULT_SLIPPAGE_BPS)
     return parser
@@ -90,6 +101,7 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     build_market_data: Callable[[SectorsConfig], SectorsMarketData] | None = None,
+    build_telegram_sender: Callable[[SectorsConfig], TelegramSender] | None = None,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
     today: Callable[[], date] | None = None,
@@ -150,6 +162,18 @@ def main(
         return _run_signal(
             config,
             args,
+            stdout=stdout,
+            stderr=stderr,
+            timezone=timezone,
+            today=today() if today else _today(timezone),
+        )
+
+    if args.command == "run-daily":
+        return _run_daily(
+            config,
+            args,
+            build_market_data=build_market_data,
+            build_telegram_sender=build_telegram_sender,
             stdout=stdout,
             stderr=stderr,
             timezone=timezone,
@@ -349,6 +373,92 @@ def _run_signal(
         if report.status != "ok":
             return EXIT_UNEXPECTED
         return 0
+    except (CacheError, MarketDataError, ValueError) as error:
+        print(f"error: {error}", file=stderr)
+        return EXIT_UNEXPECTED
+
+
+def _telegram_sender(
+    config: SectorsConfig,
+    build_telegram_sender: Callable[[SectorsConfig], TelegramSender] | None,
+) -> TelegramSender | None:
+    """Build the delivery sender, or None when Telegram is not configured."""
+    if build_telegram_sender is not None:
+        return build_telegram_sender(config)
+    token = config.telegram_bot_token
+    chat_id = config.telegram_chat_id
+    if token is None or chat_id is None:
+        return None
+    raw_token = token.get_secret_value().strip()
+    if not raw_token or not chat_id.strip():
+        return None
+    return TelegramHttpSender(
+        bot_token=raw_token,
+        chat_id=chat_id.strip(),
+        message_thread_id=config.telegram_message_thread_id,
+    )
+
+
+def _run_daily(
+    config: SectorsConfig,
+    args: argparse.Namespace,
+    *,
+    build_market_data: Callable[[SectorsConfig], SectorsMarketData] | None,
+    build_telegram_sender: Callable[[SectorsConfig], TelegramSender] | None,
+    stdout: TextIO,
+    stderr: TextIO,
+    timezone: ZoneInfo,
+    today: date,
+) -> int:
+    """Execute the run-daily command (live pipeline or manual replay)."""
+    market_date = args.market_date if args.market_date is not None else today
+    if args.lookback < 1:
+        print("error: --lookback must be >= 1", file=stderr)
+        return EXIT_UNEXPECTED
+    if args.min_samples < 1:
+        print("error: --min-samples must be >= 1", file=stderr)
+        return EXIT_UNEXPECTED
+    if market_date > today:
+        print("error: --market-date cannot be in the future", file=stderr)
+        return EXIT_UNEXPECTED
+
+    logger = configure_logging(
+        stdout, timezone, event="sector_daily_stage", name="kim_sectors.daily"
+    )
+    try:
+        factory = build_market_data or SectorsHttpAdapter
+        client = factory(config)
+        sender = _telegram_sender(config, build_telegram_sender)
+        run_daily(
+            client=client,
+            index=config.kim_sectors_universe_index,
+            market_date=market_date,
+            lookback=args.lookback,
+            min_samples=args.min_samples,
+            cache_dir=config.kim_sectors_cache_dir,
+            output_dir=config.kim_sectors_output_dir,
+            timezone=timezone,
+            logger=logger,
+            today=today,
+            sender=sender,
+            fetch=market_date == today,
+        )
+        return 0
+    except TelegramDeliveryError as error:
+        print(f"error: telegram delivery failed: {error}", file=stderr)
+        return EXIT_TELEGRAM
+    except SectorsAuthError as error:
+        log_stage(logger, "auth", status="error")
+        print(f"error: authentication failed: {error}", file=stderr)
+        return EXIT_AUTH
+    except SectorsSchemaError as error:
+        log_stage(logger, "validate", status="error")
+        print(f"error: response schema invalid: {error}", file=stderr)
+        return EXIT_SCHEMA
+    except SectorsRequestError as error:
+        log_stage(logger, "fetch", status="error")
+        print(f"error: Sectors request failed: {error}", file=stderr)
+        return EXIT_REQUEST
     except (CacheError, MarketDataError, ValueError) as error:
         print(f"error: {error}", file=stderr)
         return EXIT_UNEXPECTED
