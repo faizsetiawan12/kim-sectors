@@ -637,8 +637,8 @@ def test_backtest_empty_candidates_liquidates_to_cash(monkeypatch, tmp_path):
 
 
 def test_backtest_repeat_is_deterministic_and_makes_no_api_calls(monkeypatch, tmp_path):
-    import main as main_module
     import kim_sectors.market_data.live as live
+    import kim_sectors.workflow.adapters as adapters
 
     def boom(*args, **kwargs):
         raise AssertionError("run-backtest must not call the Sectors API")
@@ -646,7 +646,7 @@ def test_backtest_repeat_is_deterministic_and_makes_no_api_calls(monkeypatch, tm
     # Any adapter construction anywhere in the command path would fail loudly:
     # the backtest must be pure cache reads.
     monkeypatch.setattr(live, "SectorsHttpAdapter", boom)
-    monkeypatch.setattr(main_module, "SectorsHttpAdapter", boom)
+    monkeypatch.setattr(adapters, "SectorsHttpAdapter", boom)
     cache_dir = tmp_path / "cache"
     seed_universe(cache_dir, ["BBCA"], date(2026, 8, 1))
     seed_win_loss_history(cache_dir, "BBCA")
