@@ -582,6 +582,52 @@ def test_signal_excludes_non_buy_broker_days_from_ev_samples(monkeypatch, tmp_pa
     assert complete["candidates"][0]["samples"] == 2
 
 
+def test_signal_excludes_net_selling_buy_activity(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    seed_universe(cache_dir, ["BBCA"], date(2026, 8, 1))
+    seed_daily(
+        cache_dir,
+        "BBCA",
+        [
+            (date(2026, 8, 10), "100"),
+            (date(2026, 8, 11), "110"),
+            (date(2026, 8, 12), "99"),
+            (date(2026, 8, 13), "89.1"),
+        ],
+    )
+    net_selling_with_buys = [{
+        "broker_code": "MIR", "bfreq": 1, "blot": 1, "bval": "100",
+        "bavg_per_share": "100", "sfreq": 2, "slot": 2, "sval": "200",
+        "savg_per_share": "100", "nlot": -1, "nval": "-100", "navg_per_share": "100",
+    }]
+    seed_broker(
+        cache_dir, "BBCA", [date(2026, 8, 10), date(2026, 8, 11), date(2026, 8, 12)],
+        {date(2026, 8, 11): net_selling_with_buys},
+    )
+    result, output, error = run_signal(
+        monkeypatch, tmp_path, "--market-date", "2026-08-13", "--lookback", "1", "--min-samples", "2",
+    )
+    assert result == 0, error.getvalue()
+    complete = [json.loads(line) for line in output.getvalue().splitlines()][-1]
+    assert complete["candidates"][0]["samples"] == 2
+
+
+def test_signal_marks_malformed_broker_summary_visible(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    seed_universe(cache_dir, ["BBCA"], date(2026, 8, 1))
+    seed_daily(cache_dir, "BBCA", [(date(2026, 8, 10), "100"), (date(2026, 8, 11), "110")])
+    seed_broker(cache_dir, "BBCA", [date(2026, 8, 10)])
+    broker_path = cache_dir / "broker" / "BBCA.json"
+    payload = json.loads(broker_path.read_text())
+    payload["rows"][0]["summary"][0]["nval"] = "not-a-number"
+    broker_path.write_text(json.dumps(payload))
+    result, output, error = run_signal(monkeypatch, tmp_path, "--market-date", "2026-08-11", "--lookback", "1", "--min-samples", "1")
+    assert result == 0, error.getvalue()
+    complete = [json.loads(line) for line in output.getvalue().splitlines()][-1]
+    assert "Cannot read cache" in complete["ineligible_reasons"][0]["reason"]
+    assert "nval" in complete["ineligible_reasons"][0]["reason"]
+
+
 def test_signal_marks_invalid_ev_history_ineligible(monkeypatch, tmp_path):
     cache_dir = tmp_path / "cache"
     seed_universe(cache_dir, ["BBCA"], date(2026, 8, 1))

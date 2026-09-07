@@ -26,7 +26,7 @@ The pipeline is:
 Monthly Momentum is the trailing return over 21 available trading sessions:
 `(end_close / start_close) - 1`.
 
-Broker EV estimates raw next-day outcomes from historical broker-summary observations:
+Broker EV estimates raw next-day outcomes only from historical broker-summary observations with qualifying broker-buy activity: positive buy value or buy lots and positive net accumulation. Its formula is:
 `p × reward-risk − (1 − p)`.
 
 The composite Signal Score is:

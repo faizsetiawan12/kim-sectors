@@ -20,20 +20,38 @@ from .momentum import momentum_return
 HIGHLIGHT_NOTE = "For research and decision support only; not a buy or sell recommendation."
 
 
-def _qualifies_buy_activity(summary: list[dict]) -> bool:
-    """Return True when a broker summary shows broker-buying activity.
+def _qualifies_buy_activity(
+    summary: list[dict], *, symbol: str, day: date
+) -> bool:
+    """Return whether a broker day has buying and net accumulation.
 
-    Qualification requires a positive total buy value (``bval``) or a
-    positive total buy lot (``blot``); net accumulation (``nval`` > 0) also
-    qualifies. Days with only sells or zero buy activity do not qualify.
+    Broker EV observations require positive buy value or buy lots *and*
+    positive net value. Invalid summary numbers are cache-data errors, not
+    non-qualifying observations, so callers can report them explicitly.
     """
+    buy_value = Decimal("0")
+    buy_lots = 0
+    net_value = Decimal("0")
+    for index, row in enumerate(summary):
+        if not isinstance(row, dict):
+            raise CacheError(
+                f"Cached broker row for {symbol} on {day} has malformed summary row {index}"
+            )
+        try:
+            buy_value += Decimal(str(row["bval"]))
+            buy_lots += int(row["blot"])
+            net_value += Decimal(str(row["nval"]))
+        except (KeyError, InvalidOperation, ValueError, TypeError, ArithmeticError) as error:
+            raise CacheError(
+                f"Cached broker row for {symbol} on {day} has malformed summary row "
+                f"{index}: {error}"
+            ) from error
     try:
-        buy_value = sum((Decimal(str(row.get("bval", "0"))) for row in summary), Decimal("0"))
-        buy_lots = sum((int(row.get("blot", 0) or 0) for row in summary), 0)
-        net_value = sum((Decimal(str(row.get("nval", "0"))) for row in summary), Decimal("0"))
-    except (InvalidOperation, ValueError, TypeError, ArithmeticError):
-        return False
-    return buy_value > 0 or buy_lots > 0 or net_value > 0
+        return (buy_value > 0 or buy_lots > 0) and net_value > 0
+    except (InvalidOperation, ArithmeticError) as error:
+        raise CacheError(
+            f"Cached broker row for {symbol} on {day} has invalid summary numbers: {error}"
+        ) from error
 
 
 def _load_broker_dates(symbol: str, cache_dir: Path, market_date: date) -> set[date]:
@@ -47,13 +65,14 @@ def _load_broker_dates(symbol: str, cache_dir: Path, market_date: date) -> set[d
             raise CacheError(f"Cached broker row for {symbol} has an invalid date")
         if day > market_date:
             continue
-        summary = row.get("summary") or []
-        if not isinstance(summary, list) or not _qualifies_buy_activity(summary):
-            continue
-        dates.add(day)
+        summary = row.get("summary")
+        if not isinstance(summary, list):
+            raise CacheError(
+                f"Cached broker row for {symbol} on {day} has a malformed summary"
+            )
+        if _qualifies_buy_activity(summary, symbol=symbol, day=day):
+            dates.add(day)
     return dates
-
-
 def rank_signal(
     *,
     index: str,
