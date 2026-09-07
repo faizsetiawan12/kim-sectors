@@ -113,6 +113,49 @@ def _benchmark_comparison(
     )
 
 
+def _compute_metrics(
+    equity: list[EquityPoint],
+    entry_dates: list[date],
+    final_session: date,
+) -> tuple[list[PeriodReturn], float | None, float | None, float]:
+    """Derive period returns, win rate, average period return, and drawdown.
+
+    Periods run from one entry close to the next entry close; the final period
+    ends at the close of the last session in the window. Win rate is the share
+    of positive periods. Maximum drawdown is the deepest peak-to-trough equity
+    decline, reported as a non-positive fraction.
+    """
+    equity_by_date = {point.date: point.value for point in equity}
+    periods: list[PeriodReturn] = []
+    for first, second in zip(entry_dates, entry_dates[1:]):
+        periods.append(
+            PeriodReturn(
+                start_date=first,
+                end_date=second,
+                value=equity_by_date[second] / equity_by_date[first] - 1.0,
+            )
+        )
+    if entry_dates and entry_dates[-1] != final_session:
+        periods.append(
+            PeriodReturn(
+                start_date=entry_dates[-1],
+                end_date=final_session,
+                value=equity_by_date[final_session] / equity_by_date[entry_dates[-1]] - 1.0,
+            )
+        )
+    win_rate: float | None = None
+    average: float | None = None
+    if periods:
+        win_rate = sum(1 for p in periods if p.value > 0) / len(periods)
+        average = sum(p.value for p in periods) / len(periods)
+    peak = equity[0].value
+    drawdown = 0.0
+    for point in equity:
+        peak = max(peak, point.value)
+        drawdown = min(drawdown, point.value / peak - 1.0)
+    return periods, win_rate, average, drawdown
+
+
 def run_backtest(
     *,
     index: str,
@@ -391,36 +434,11 @@ def run_backtest(
     entry_dates = sorted(
         {event.entry_date for event in events if event.entry_date is not None}
     )
-    equity_by_date = {point.date: point.value for point in equity}
-    period_returns: list[PeriodReturn] = []
-    for first, second in zip(entry_dates, entry_dates[1:]):
-        period_returns.append(
-            PeriodReturn(
-                start_date=first,
-                end_date=second,
-                value=equity_by_date[second] / equity_by_date[first] - 1.0,
-            )
-        )
-    if entry_dates and entry_dates[-1] != sessions[-1]:
-        period_returns.append(
-            PeriodReturn(
-                start_date=entry_dates[-1],
-                end_date=sessions[-1],
-                value=equity_by_date[sessions[-1]] / equity_by_date[entry_dates[-1]] - 1.0,
-            )
-        )
-
-    win_rate: float | None = None
-    average_period_return: float | None = None
-    if period_returns:
-        win_rate = sum(1 for p in period_returns if p.value > 0) / len(period_returns)
-        average_period_return = sum(p.value for p in period_returns) / len(period_returns)
-
-    peak = equity[0].value
-    max_drawdown = 0.0
-    for point in equity:
-        peak = max(peak, point.value)
-        max_drawdown = min(max_drawdown, point.value / peak - 1.0)
+    period_returns, win_rate, average_period_return, max_drawdown = _compute_metrics(
+        equity=equity,
+        entry_dates=entry_dates,
+        final_session=sessions[-1],
+    )
 
     benchmark = _benchmark_comparison(
         index=index,
