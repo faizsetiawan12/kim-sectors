@@ -63,11 +63,27 @@ def seed_daily(
 
 def seed_broker(cache_dir: Path, symbol: str, days: list[date], *, span: DateSpan) -> None:
     rows = []
+    default_activity = [
+        {
+            "broker_code": "MIR",
+            "bfreq": 1,
+            "blot": 1,
+            "bval": "100",
+            "bavg_per_share": "100",
+            "sfreq": 1,
+            "slot": 1,
+            "sval": "50",
+            "savg_per_share": "50",
+            "nlot": 1,
+            "nval": "50",
+            "navg_per_share": "50",
+        }
+    ]
     for day in days:
         row = CachedBrokerSummaryDay(
             symbol=symbol,
             date=day,
-            summary=[],
+            summary=default_activity,
             provenance=Provenance(
                 source="sectors",
                 retrieved_at=datetime(2026, 9, 2, 16, 0, 0, tzinfo=ZoneInfo("Asia/Jakarta")),
@@ -76,7 +92,6 @@ def seed_broker(cache_dir: Path, symbol: str, days: list[date], *, span: DateSpa
         ).model_dump(mode="json")
         rows.append(row)
     write_cache(symbol, "broker", cache_dir, rows, [span])
-
 
 def run_backtest(monkeypatch, tmp_path: Path, *extra: str):
     monkeypatch.setenv("SECTORS_API_KEY", "test-dummy-key-123")

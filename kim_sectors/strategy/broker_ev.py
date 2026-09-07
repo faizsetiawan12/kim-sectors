@@ -50,7 +50,7 @@ def broker_ev_stats(returns: list[float]) -> dict[str, float | int]:
         reward_risk = float(reward_risk_dec)
         win_prob = float(p_dec)
         raw_ev = float(raw_ev_dec)
-    except (InvalidOperation, DivisionByZeroError, ArithmeticError) as error:
+    except (ZeroDivisionError, InvalidOperation, ArithmeticError) as error:
         raise ValueError(f"broker EV calculation failed: {error}") from error
     for value in (win_prob, avg_gain, avg_loss, reward_risk, raw_ev):
         if not isfinite(value):
@@ -105,7 +105,7 @@ def next_session_returns(
             )
         try:
             value = float((end_close - start_close) / start_close)
-        except (InvalidOperation, DivisionByZeroError, ArithmeticError) as error:
+        except (ZeroDivisionError, InvalidOperation, ArithmeticError) as error:
             raise ValueError(f"broker EV calculation failed: {error}") from error
         if not isfinite(value):
             raise ValueError("broker EV undefined: non-finite return")

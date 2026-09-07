@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..market_data.errors import CacheError
 from ..observability import log_stage
-from .cache_access import load_closes, select_membership
+from .cache_access import load_momentum_window, select_membership
 from .models import IneligibleCandidate, RankedCandidate, RankReport
 from .momentum import momentum_return
 
@@ -62,29 +62,14 @@ def rank_momentum(
 
     for symbol in membership.symbols:
         try:
-            on_or_before = load_closes(symbol, cache_dir, market_date)
-        except CacheError as error:
-            mark_ineligible(symbol, str(error))
+            window, _ = load_momentum_window(symbol, cache_dir, market_date, required)
+        except (CacheError, ValueError) as error:
+            reason = str(error)
+            mark_ineligible(symbol, reason)
             continue
-        if not on_or_before or on_or_before[-1][0] != market_date:
-            mark_ineligible(symbol, f"no price on market date {market_date.isoformat()}")
-            continue
-        if len(on_or_before) < required:
-            mark_ineligible(
-                symbol,
-                f"insufficient history: need {required} closes on or before "
-                f"{market_date.isoformat()}, found {len(on_or_before)}",
-            )
-            continue
-        window = on_or_before[-required:]
         start_date, start_close, start_raw = window[0]
         end_date, end_close, end_raw = window[-1]
-        if start_close <= 0 or end_close <= 0:
-            bad_date = start_date if start_close <= 0 else end_date
-            mark_ineligible(
-                symbol, f"invalid price: non-positive close on {bad_date.isoformat()}"
-            )
-            continue
+
         try:
             momentum = momentum_return(start_close, end_close)
         except ValueError as error:

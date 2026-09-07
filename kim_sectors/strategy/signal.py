@@ -7,18 +7,51 @@ from logging import Logger
 from math import isfinite
 from pathlib import Path
 
+from decimal import Decimal, InvalidOperation
+
 from ..market_data.cache import read_cache
 from ..market_data.errors import CacheError
 from ..observability import log_stage
 from .broker_ev import broker_ev_stats, next_session_returns
-from .cache_access import load_closes, select_membership
+from .cache_access import load_momentum_window, select_membership
 from .models import IneligibleCandidate, SignalCandidate, SignalHighlight, SignalReport
 from .momentum import momentum_return
 
 HIGHLIGHT_NOTE = "For research and decision support only; not a buy or sell recommendation."
 
 
+def _qualifies_buy_activity(
+    summary: list[dict], *, symbol: str, day: date
+) -> bool:
+    """Return whether a broker day has buying and net accumulation.
+
+    Broker EV observations require positive buy value or buy lots *and*
+    positive net value. Invalid summary numbers are cache-data errors, not
+    non-qualifying observations, so callers can report them explicitly.
+    """
+    buy_value = Decimal("0")
+    buy_lots = 0
+    net_value = Decimal("0")
+    for index, row in enumerate(summary):
+        if not isinstance(row, dict):
+            raise CacheError(
+                f"Cached broker row for {symbol} on {day} has malformed summary row "
+                f"{index}: expected dict, got {type(row).__name__}"
+            )
+        try:
+            buy_value += Decimal(str(row["bval"]))
+            buy_lots += int(row["blot"])
+            net_value += Decimal(str(row["nval"]))
+        except (KeyError, InvalidOperation, ValueError, TypeError, ArithmeticError) as error:
+            raise CacheError(
+                f"Cached broker row for {symbol} on {day} has malformed summary row "
+                f"{index}: {error}"
+            ) from error
+    return (buy_value > 0 or buy_lots > 0) and net_value > 0
+
+
 def _load_broker_dates(symbol: str, cache_dir: Path, market_date: date) -> set[date]:
+    """Return broker observation dates with qualifying broker-buy activity."""
     rows, _ = read_cache(symbol, "broker", cache_dir)
     dates: set[date] = set()
     for row in rows:
@@ -28,7 +61,13 @@ def _load_broker_dates(symbol: str, cache_dir: Path, market_date: date) -> set[d
             raise CacheError(f"Cached broker row for {symbol} has an invalid date")
         if day > market_date:
             continue
-        dates.add(day)
+        summary = row.get("summary")
+        if not isinstance(summary, list):
+            raise CacheError(
+                f"Cached broker row for {symbol} on {day} has a malformed summary"
+            )
+        if _qualifies_buy_activity(summary, symbol=symbol, day=day):
+            dates.add(day)
     return dates
 
 
@@ -84,29 +123,14 @@ def rank_signal(
 
     for symbol in membership.symbols:
         try:
-            on_or_before = load_closes(symbol, cache_dir, market_date)
-        except CacheError as error:
+            window, on_or_before = load_momentum_window(
+                symbol, cache_dir, market_date, required
+            )
+        except (CacheError, ValueError) as error:
             mark_ineligible(symbol, str(error))
             continue
-        if not on_or_before or on_or_before[-1][0] != market_date:
-            mark_ineligible(symbol, f"no price on market date {market_date.isoformat()}")
-            continue
-        if len(on_or_before) < required:
-            mark_ineligible(
-                symbol,
-                f"insufficient history: need {required} closes on or before "
-                f"{market_date.isoformat()}, found {len(on_or_before)}",
-            )
-            continue
-        window = on_or_before[-required:]
         start_date, start_close, start_raw = window[0]
         end_date, end_close, end_raw = window[-1]
-        if start_close <= 0 or end_close <= 0:
-            bad_date = start_date if start_close <= 0 else end_date
-            mark_ineligible(
-                symbol, f"invalid price: non-positive close on {bad_date.isoformat()}"
-            )
-            continue
         try:
             momentum = momentum_return(start_close, end_close)
         except ValueError as error:
