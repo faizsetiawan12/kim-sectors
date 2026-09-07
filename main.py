@@ -23,6 +23,13 @@ from kim_sectors.market_data import (
     ping_sectors,
     sync_cache,
 )
+from kim_sectors.backtest import (
+    DEFAULT_COST_BPS,
+    DEFAULT_REBALANCE_SESSIONS,
+    DEFAULT_SLIPPAGE_BPS,
+    DEFAULT_TOP_K,
+    run_backtest,
+)
 from kim_sectors.observability import configure_logging, log_stage
 from kim_sectors.outputs.telegram import (
     TelegramDeliveryError,
@@ -71,6 +78,18 @@ def _parser() -> argparse.ArgumentParser:
     daily.add_argument("--market-date", type=date.fromisoformat, default=None)
     daily.add_argument("--lookback", type=int, default=DEFAULT_MOMENTUM_LOOKBACK)
     daily.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
+    backtest = commands.add_parser(
+        "run-backtest", help="replay Momentum x Broker EV over cached history"
+    )
+    backtest.add_argument("--universe", default=None)
+    backtest.add_argument("--start", required=True, type=date.fromisoformat)
+    backtest.add_argument("--end", required=True, type=date.fromisoformat)
+    backtest.add_argument("--lookback", type=int, default=DEFAULT_MOMENTUM_LOOKBACK)
+    backtest.add_argument("--min-samples", type=int, default=DEFAULT_MIN_SAMPLES)
+    backtest.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
+    backtest.add_argument("--rebalance-sessions", type=int, default=DEFAULT_REBALANCE_SESSIONS)
+    backtest.add_argument("--cost-bps", type=int, default=DEFAULT_COST_BPS)
+    backtest.add_argument("--slippage-bps", type=int, default=DEFAULT_SLIPPAGE_BPS)
     return parser
 
 
@@ -155,6 +174,16 @@ def main(
             args,
             build_market_data=build_market_data,
             build_telegram_sender=build_telegram_sender,
+            stdout=stdout,
+            stderr=stderr,
+            timezone=timezone,
+            today=today() if today else _today(timezone),
+        )
+
+    if args.command == "run-backtest":
+        return _run_backtest(
+            config,
+            args,
             stdout=stdout,
             stderr=stderr,
             timezone=timezone,
@@ -430,6 +459,89 @@ def _run_daily(
         log_stage(logger, "fetch", status="error")
         print(f"error: Sectors request failed: {error}", file=stderr)
         return EXIT_REQUEST
+    except (CacheError, MarketDataError, ValueError) as error:
+        print(f"error: {error}", file=stderr)
+        return EXIT_UNEXPECTED
+
+
+def _run_backtest(
+    config: SectorsConfig,
+    args: argparse.Namespace,
+    *,
+    stdout: TextIO,
+    stderr: TextIO,
+    timezone: ZoneInfo,
+    today: date,
+) -> int:
+    """Execute the run-backtest command over validated cache records only."""
+    index = args.universe or config.kim_sectors_universe_index
+    if args.start > args.end:
+        print("error: --start must be on or before --end", file=stderr)
+        return EXIT_UNEXPECTED
+    if args.end > today:
+        print("error: --end cannot be in the future", file=stderr)
+        return EXIT_UNEXPECTED
+    if args.lookback < 1:
+        print("error: --lookback must be >= 1", file=stderr)
+        return EXIT_UNEXPECTED
+    if args.min_samples < 1:
+        print("error: --min-samples must be >= 1", file=stderr)
+        return EXIT_UNEXPECTED
+    if args.top_k < 1:
+        print("error: --top-k must be >= 1", file=stderr)
+        return EXIT_UNEXPECTED
+    if args.rebalance_sessions < 1:
+        print("error: --rebalance-sessions must be >= 1", file=stderr)
+        return EXIT_UNEXPECTED
+    if args.cost_bps < 0:
+        print("error: --cost-bps must be >= 0", file=stderr)
+        return EXIT_UNEXPECTED
+    if args.slippage_bps < 0:
+        print("error: --slippage-bps must be >= 0", file=stderr)
+        return EXIT_UNEXPECTED
+
+    ensure_dirs(
+        cache_dir=config.kim_sectors_cache_dir,
+        output_dir=config.kim_sectors_output_dir,
+    )
+    logger = configure_logging(
+        stdout, timezone, event="sector_backtest_stage", name="kim_sectors.backtest"
+    )
+    try:
+        report = run_backtest(
+            index=index,
+            start=args.start,
+            end=args.end,
+            lookback=args.lookback,
+            min_samples=args.min_samples,
+            top_k=args.top_k,
+            rebalance_sessions=args.rebalance_sessions,
+            cost_bps=args.cost_bps,
+            slippage_bps=args.slippage_bps,
+            cache_dir=config.kim_sectors_cache_dir,
+            logger=logger,
+            today=today,
+            timezone=timezone,
+            output_dir=config.kim_sectors_output_dir,
+        )
+        if report.status != "ok":
+            missing_symbols = [
+                item.symbol
+                for item in report.coverage.symbols
+                if item.daily_missing or item.broker_missing
+            ]
+            print(
+                "error: cache coverage incomplete for the requested window; "
+                "run `sync-cache --start {} --end {} --fetch` to fetch missing "
+                "history for: {}".format(
+                    args.start.isoformat(),
+                    args.end.isoformat(),
+                    ", ".join(missing_symbols),
+                ),
+                file=stderr,
+            )
+            return EXIT_UNEXPECTED
+        return 0
     except (CacheError, MarketDataError, ValueError) as error:
         print(f"error: {error}", file=stderr)
         return EXIT_UNEXPECTED

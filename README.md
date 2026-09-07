@@ -159,11 +159,53 @@ Exit codes: `0` success (including a skipped delivery), `1` unexpected/cache
 failure (including a future market date or invalid lookback/min-samples), `2`
 authentication, `3` schema, `4` request, `5` Telegram delivery failure.
 
-## Planned commands
+### `run-backtest`
+
+Replay the `Momentum × Broker EV` strategy over validated cached history with
+no Sectors API calls: the replay reads only Data Cache records, so repeating
+the same Backtest Run is deterministic and costs zero credits.
 
 ```bash
-python main.py run-backtest --universe lq45 --top-k 3
+python main.py run-backtest --start 2026-08-01 --end 2026-08-31 \
+  [--universe lq45] [--lookback 21] [--min-samples 5] [--top-k 3] \
+  [--rebalance-sessions 21] [--cost-bps 10] [--slippage-bps 5]
 ```
+
+- `--start`/`--end` define the inclusive replay window; `--universe` selects
+  the cached universe index (default `lq45`). Momentum lookback and broker EV
+  minimum samples match the `signal` command.
+- `--top-k` is the portfolio size; the target portfolio holds the top-k
+  eligible candidates equal-weight. `--rebalance-sessions` is the number of
+  sessions between rebalances (default 21, approximately monthly).
+- `--cost-bps`/`--slippage-bps` are explicit per-trade assumptions (commission
+  and slippage in basis points) applied to every buy and sell.
+
+Before any signal math the run checks cache coverage for the requested window
+for every universe symbol (both daily bars and broker summaries). Missing
+history is reported with the exact `sync-cache` command to fetch it; the run
+refuses to calculate over gaps.
+
+The replay is point-in-time: at each rebalance date `T` the composite signal
+uses only data observable by `T` (broker EV outcomes whose next session close
+is on or before `T`), matching the `signal` command. End-of-day signals enter
+at the next eligible market session close, never earlier; the entry price and
+timing are recorded per trade. The universe is fixed to the membership
+snapshot effective on or before `--start`. If a target symbol has no close on
+the entry session its entry is skipped and recorded. When a rebalance produces
+no eligible candidates the portfolio liquidates to cash. Final equity is marked
+to the close of the last session in the window; no terminal liquidation cost is
+assumed.
+
+The result is written to `output/reports/backtest_<universe>_<start>_<end>
+_l<lookback>_k<top-k>_r<rebalance>.json` and includes the configuration,
+coverage, total return, win rate, average period return, maximum drawdown
+(deepest peak-to-trough decline, reported as a non-positive fraction),
+observation and trade counts, an equal-weight buy-and-hold benchmark comparison
+of the universe (when endpoint closes are cached), period returns, and the
+per-session equity curve.
+
+Exit codes: `0` success, `1` unexpected/cache failure (including incomplete
+coverage, missing universe membership, or invalid arguments).
 
 ## License
 
