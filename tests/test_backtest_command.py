@@ -656,6 +656,39 @@ def test_backtest_repeat_is_deterministic_and_makes_no_api_calls(monkeypatch, tm
     assert first_report == second_report
 
 
+def test_backtest_reconstitutes_universe_and_liquidates_removed_holdings(monkeypatch, tmp_path):
+    cache_dir = tmp_path / "cache"
+    seed_universe(cache_dir, ["BBCA"], date(2026, 8, 1))
+    seed_universe(cache_dir, ["ASII"], date(2026, 8, 11))
+    seed_win_loss_history(cache_dir, "BBCA")
+    seed_win_loss_history(cache_dir, "ASII")
+
+    result, output, error = run_backtest(
+        monkeypatch,
+        tmp_path,
+        "--start", "2026-08-10", "--end", "2026-08-12",
+        "--lookback", "1", "--min-samples", "1",
+        "--top-k", "1", "--rebalance-sessions", "1",
+        "--cost-bps", "0", "--slippage-bps", "0",
+    )
+
+    assert result == 0, error.getvalue()
+    report = load_artifact(tmp_path)
+
+    # BBCA is active for the first signal, then ASII replaces it after the
+    # 08-11 membership reconstitution. The removed holding is liquidated at
+    # the same rebalance session where ASII is entered.
+    assert [event["target"] for event in report["rebalance_events"][:2]] == [
+        ["BBCA"],
+        ["ASII"],
+    ]
+    assert [(trade["symbol"], trade["side"], trade["date"]) for trade in report["trades_detail"]] == [
+        ("BBCA", "buy", "2026-08-11"),
+        ("BBCA", "sell", "2026-08-12"),
+        ("ASII", "buy", "2026-08-12"),
+    ]
+
+
 def test_backtest_rejects_invalid_arguments(monkeypatch, tmp_path):
     cache_dir = tmp_path / "cache"
     seed_universe(cache_dir, ["BBCA"], date(2026, 8, 1))

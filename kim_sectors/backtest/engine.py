@@ -16,7 +16,7 @@ from logging import Logger
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from ..market_data.cache import read_cache
+from ..market_data.cache import load_universe_membership_records, read_cache
 from ..market_data.errors import CacheError
 from ..observability import log_stage
 from ..strategy.cache_access import select_membership
@@ -58,6 +58,8 @@ def _benchmark_comparison(
     *,
     index: str,
     symbols: list[str],
+    start_universe: frozenset[str],
+    end_universe: frozenset[str],
     prices: dict[str, dict[date, Decimal]],
     sessions: list[date],
     start: date,
@@ -72,7 +74,9 @@ def _benchmark_comparison(
     eligible = [
         symbol
         for symbol in symbols
-        if start in prices.get(symbol, {})
+        if symbol in start_universe
+        and symbol in end_universe
+        and start in prices.get(symbol, {})
         and end in prices.get(symbol, {})
         and prices[symbol][start] > 0
         and prices[symbol][end] > 0
@@ -199,7 +203,15 @@ def run_backtest(
         raise ValueError("--slippage-bps must be >= 0")
 
     membership = select_membership(index, start, cache_dir)
-    symbols = list(membership.symbols)
+    memberships = load_universe_membership_records(index, cache_dir)
+    symbols = sorted(
+        {
+            symbol
+            for snapshot in memberships
+            if snapshot.effective_date <= end
+            for symbol in snapshot.symbols
+        }
+    )
     log_stage(
         logger,
         "universe",
@@ -318,10 +330,16 @@ def run_backtest(
     for session in sessions:
         if session in transitions:
             signal_date = transitions[session]
+            active_membership = select_membership(index, signal_date, cache_dir)
             report = signal_at(signal_date)
             observations += len(report.candidates)
             ineligible_observations += len(report.ineligible)
-            target = [c.symbol for c in report.candidates[:top_k]]
+            active_symbols = set(active_membership.symbols)
+            target = [
+                c.symbol
+                for c in report.candidates[:top_k]
+                if c.symbol in active_symbols
+            ]
             skipped: list[str] = []
 
             for symbol in sorted(holdings):
@@ -415,14 +433,21 @@ def run_backtest(
     for signal_date in signal_dates:
         if signal_date in executed_signal_dates:
             continue
+        active_membership = select_membership(index, signal_date, cache_dir)
         report = signal_at(signal_date)
         observations += len(report.candidates)
         ineligible_observations += len(report.ineligible)
+        active_symbols = set(active_membership.symbols)
+        target = [
+            c.symbol
+            for c in report.candidates[:top_k]
+            if c.symbol in active_symbols
+        ]
         events.append(
             RebalanceEvent(
                 signal_date=signal_date,
                 entry_date=None,
-                target=[c.symbol for c in report.candidates[:top_k]],
+                target=target,
                 eligible=len(report.candidates),
                 ineligible=len(report.ineligible),
                 entry_price_assumption=ENTRY_TIMING,
@@ -452,6 +477,10 @@ def run_backtest(
     benchmark = _benchmark_comparison(
         index=index,
         symbols=symbols,
+        start_universe=frozenset(membership.symbols),
+        end_universe=frozenset(
+            select_membership(index, end, cache_dir).symbols
+        ),
         prices=prices,
         sessions=sessions,
         start=start,
