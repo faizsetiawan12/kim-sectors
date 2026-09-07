@@ -83,18 +83,19 @@ def test_sync_cache_empty_universe_is_schema_failure(monkeypatch, tmp_path):
     assert "empty symbol list" in error.getvalue()
 
 
-def test_sync_cache_rejects_partial_broker_coverage(monkeypatch, tmp_path):
-    from .support import broker_summary_payload, daily_bars_payload
+def test_sync_cache_allows_non_trading_broker_gaps(monkeypatch, tmp_path):
+    from .support import daily_bars_payload
 
+    # Sat 1st - Mon 3rd window: live broker summaries skip the weekend, so only
+    # in-range row arrives. Gaps are non-trading days, not missing dates.
     adapter = InMemorySectorsAdapter(
         universe=["BBCA"],
         daily=lambda symbol, start, end: daily_bars_payload(symbol, start=start, end=end),
         broker_summary=lambda symbol, start, end: {
-            **broker_summary_payload(symbol, start=start, end=end),
-            "data": [
-                {"date": start.isoformat(), "summary": []},
-                {"date": end.isoformat(), "summary": []},
-            ],
+            "symbol": symbol,
+            "start": start,
+            "end": end,
+            "data": [{"date": start.isoformat(), "summary": []}],
         },
     )
     monkeypatch.setenv("SECTORS_API_KEY", "test-dummy-key-123")
@@ -107,8 +108,8 @@ def test_sync_cache_rejects_partial_broker_coverage(monkeypatch, tmp_path):
         stdout=StringIO(),
         stderr=error,
         today=lambda: date(2026, 9, 2),
-    ) == 3
-    assert "coverage" in error.getvalue()
+    ) == 0
+    assert "coverage" not in error.getvalue()
 
 
 def test_sync_cache_rejects_empty_daily_coverage(monkeypatch, tmp_path):

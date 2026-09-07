@@ -7,6 +7,8 @@ import os
 import tempfile
 from datetime import date
 from pathlib import Path
+
+from ..dates import add_days
 from typing import Any
 
 from .errors import CacheError
@@ -16,10 +18,6 @@ CACHE_SCHEMA_VERSION = "1"
 DAILY_DIR = "daily"
 BROKER_DIR = "broker"
 UNIVERSE_DIR = "universe"
-
-
-def _add_days(value: date, days: int) -> date:
-    return date.fromordinal(value.toordinal() + days)
 
 
 def _path(cache_dir: Path, data_type: str, symbol: str) -> Path:
@@ -36,7 +34,7 @@ def merge_spans(spans: list[DateSpan]) -> list[DateSpan]:
     merged: list[DateSpan] = [ordered[0]]
     for current in ordered[1:]:
         previous = merged[-1]
-        if current.start <= _add_days(previous.end, 1):
+        if current.start <= add_days(previous.end, 1):
             merged[-1] = DateSpan(start=previous.start, end=max(previous.end, current.end))
         else:
             merged.append(current)
@@ -53,10 +51,10 @@ def missing_spans(requested: DateSpan, covered: list[DateSpan]) -> list[DateSpan
         if span.start > requested.end:
             break
         if span.start > cursor:
-            missing.append(DateSpan(start=cursor, end=_add_days(span.start, -1)))
+            missing.append(DateSpan(start=cursor, end=add_days(span.start, -1)))
         if span.end >= requested.end:
             return missing
-        cursor = _add_days(max(cursor, span.end), 1)
+        cursor = add_days(max(cursor, span.end), 1)
     if cursor <= requested.end:
         missing.append(DateSpan(start=cursor, end=requested.end))
     return missing

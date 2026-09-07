@@ -7,6 +7,7 @@ from logging import Logger
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from ..dates import add_days
 from ..observability import log_stage
 from .base import SectorsMarketData, SyncMarketData
 from .cache import load_universe_membership, missing_spans, read_cache, write_cache
@@ -29,23 +30,27 @@ UNIVERSE_CREDIT_PER_PAGE = 1
 SCHEMA_VERSION = "1"
 
 
-def _add_days(value: date, days: int) -> date:
-    return date.fromordinal(value.toordinal() + days)
-
-
 def _require_full_coverage(
-    *, symbol: str, data_type: str, start: date, end: date, seen: set[date]
+    *, symbol: str, data_type: str, start: date, end: date, seen: list[date]
 ) -> None:
-    """Reject sparse chunk responses instead of marking gaps as covered."""
-    expected = {_add_days(start, offset) for offset in range((end - start).days + 1)}
-    if seen != expected:
-        missing = sorted(expected - seen)
-        first = missing[0].isoformat() if missing else start.isoformat()
-        label = "Daily" if data_type == "daily" else "Broker"
+    """Reject empty or unsorted chunk responses; gaps are non-trading days.
+
+    Bounds and duplicates are checked while normalizing each response row.
+    A non-empty, ascending response therefore covers the requested chunk;
+    weekends and IDX holidays legitimately produce no rows.
+    """
+    label = "Daily" if data_type == "daily" else "Broker"
+    if not seen:
         raise SectorsSchemaError(
             f"{label} response for {symbol} has incomplete coverage: "
-            f"missing {len(missing)} date(s) starting {first}"
+            f"no rows between {start.isoformat()} and {end.isoformat()}"
         )
+    for earlier, later in zip(seen, seen[1:]):
+        if later < earlier:
+            raise SectorsSchemaError(
+                f"{label} response for {symbol} is not sorted: "
+                f"{later.isoformat()} precedes {earlier.isoformat()}"
+            )
 
 
 def _chunk_span(span: DateSpan, max_days: int) -> list[DateSpan]:
@@ -53,9 +58,9 @@ def _chunk_span(span: DateSpan, max_days: int) -> list[DateSpan]:
     chunks: list[DateSpan] = []
     cursor = span.start
     while cursor <= span.end:
-        chunk_end = min(_add_days(cursor, max_days - 1), span.end)
+        chunk_end = min(add_days(cursor, max_days - 1), span.end)
         chunks.append(DateSpan(start=cursor, end=chunk_end))
-        cursor = _add_days(chunk_end, 1)
+        cursor = add_days(chunk_end, 1)
     return chunks
 
 
@@ -247,6 +252,7 @@ def _execute_plan(
         if chunk.data_type == "daily":
             bars = client.fetch_daily_bars(chunk.symbol, chunk.start, chunk.end)
             rows: list[dict] = []
+            seen_dates: list[date] = []
             seen: set[date] = set()
             for bar in bars:
                 if bar.symbol.removesuffix(".JK").upper() != chunk.symbol.upper():
@@ -262,6 +268,7 @@ def _execute_plan(
                         f"Daily response for {chunk.symbol} has duplicate date {bar.date.isoformat()}"
                     )
                 seen.add(bar.date)
+                seen_dates.append(bar.date)
                 rows.append(
                     CachedDailyBar(
                         symbol=chunk.symbol,
@@ -280,7 +287,7 @@ def _execute_plan(
                 data_type="daily",
                 start=chunk.start,
                 end=chunk.end,
-                seen=seen,
+                seen=seen_dates,
             )
             write_cache(
                 chunk.symbol,
@@ -301,6 +308,7 @@ def _execute_plan(
                 )
             rows = []
             seen = set()
+            seen_dates: list[date] = []
             for day in broker.data:
                 if broker.symbol.removesuffix(".JK").upper() != chunk.symbol.upper():
                     raise SectorsSchemaError(
@@ -315,6 +323,7 @@ def _execute_plan(
                         f"Broker response for {chunk.symbol} has duplicate date {day.date.isoformat()}"
                     )
                 seen.add(day.date)
+                seen_dates.append(day.date)
                 rows.append(
                     CachedBrokerSummaryDay(
                         symbol=chunk.symbol,
@@ -328,7 +337,7 @@ def _execute_plan(
                 data_type="broker",
                 start=chunk.start,
                 end=chunk.end,
-                seen=seen,
+                seen=seen_dates,
             )
             write_cache(
                 chunk.symbol,
