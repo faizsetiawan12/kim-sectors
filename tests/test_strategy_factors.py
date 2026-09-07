@@ -68,3 +68,45 @@ def test_broker_ev_stats_zero_division_yields_value_error_not_name_error(monkeyp
 
     with pytest.raises(ValueError, match="broker EV calculation failed"):
         broker_ev_stats([0.1, -0.1])
+
+
+def test_qualifies_buy_activity_raises_contextual_cache_error():
+    from kim_sectors.market_data.errors import CacheError
+    from kim_sectors.strategy.signal import _qualifies_buy_activity
+
+    day = date(2026, 8, 10)
+    with pytest.raises(CacheError) as exc_non_dict:
+        _qualifies_buy_activity(["not-a-dict"], symbol="BBCA", day=day)
+    assert "Cached broker row for BBCA on 2026-08-10 has malformed summary row 0: expected dict, got str" in str(exc_non_dict.value)
+
+    with pytest.raises(CacheError) as exc_bad_num:
+        _qualifies_buy_activity([{"bval": "invalid", "blot": 1, "nval": "10"}], symbol="BBCA", day=day)
+    assert "Cached broker row for BBCA on 2026-08-10 has malformed summary row 0" in str(exc_bad_num.value)
+
+
+def test_load_broker_dates_raises_contextual_cache_error_for_malformed_summary(monkeypatch, tmp_path):
+    from kim_sectors.market_data.errors import CacheError
+    from kim_sectors.strategy.signal import _load_broker_dates
+
+    day = date(2026, 8, 10)
+    monkeypatch.setattr(
+        "kim_sectors.strategy.signal.read_cache",
+        lambda symbol, data_type, cache_dir: ([{"date": day.isoformat(), "summary": "not-a-list"}], []),
+    )
+    with pytest.raises(CacheError) as exc_info:
+        _load_broker_dates("BBCA", tmp_path, day)
+    assert "Cached broker row for BBCA on 2026-08-10 has a malformed summary" in str(exc_info.value)
+
+
+def test_load_broker_dates_rejects_net_selling(monkeypatch, tmp_path):
+    from kim_sectors.strategy.signal import _load_broker_dates
+
+    day = date(2026, 8, 10)
+    # Buy value positive but net value negative (net selling)
+    summary_net_selling = [{"bval": "100", "blot": 1, "nval": "-50"}]
+    monkeypatch.setattr(
+        "kim_sectors.strategy.signal.read_cache",
+        lambda symbol, data_type, cache_dir: ([{"date": day.isoformat(), "summary": summary_net_selling}], []),
+    )
+    assert _load_broker_dates("BBCA", tmp_path, day) == set()
+

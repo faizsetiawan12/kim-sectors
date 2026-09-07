@@ -35,7 +35,8 @@ def _qualifies_buy_activity(
     for index, row in enumerate(summary):
         if not isinstance(row, dict):
             raise CacheError(
-                f"Cached broker row for {symbol} on {day} has malformed summary row {index}"
+                f"Cached broker row for {symbol} on {day} has malformed summary row "
+                f"{index}: expected dict, got {type(row).__name__}"
             )
         try:
             buy_value += Decimal(str(row["bval"]))
@@ -46,12 +47,7 @@ def _qualifies_buy_activity(
                 f"Cached broker row for {symbol} on {day} has malformed summary row "
                 f"{index}: {error}"
             ) from error
-    try:
-        return (buy_value > 0 or buy_lots > 0) and net_value > 0
-    except (InvalidOperation, ArithmeticError) as error:
-        raise CacheError(
-            f"Cached broker row for {symbol} on {day} has invalid summary numbers: {error}"
-        ) from error
+    return (buy_value > 0 or buy_lots > 0) and net_value > 0
 
 
 def _load_broker_dates(symbol: str, cache_dir: Path, market_date: date) -> set[date]:
@@ -73,6 +69,8 @@ def _load_broker_dates(symbol: str, cache_dir: Path, market_date: date) -> set[d
         if _qualifies_buy_activity(summary, symbol=symbol, day=day):
             dates.add(day)
     return dates
+
+
 def rank_signal(
     *,
     index: str,
