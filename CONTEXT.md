@@ -6,7 +6,7 @@ KIM Sectors is KIM's automated IDX market-intelligence workflow for the Sectors 
 
 - **Universe**: The selected set of IDX securities analyzed by the workflow; LQ45 is the default.
 - **Momentum**: The percentage return over a configurable trailing number of trading days, monthly by default.
-- **Broker EV**: Raw next-day expected value estimated from qualifying Sectors broker-summary observations — days with positive buy value or buy lots and positive net accumulation; net-selling and zero-buy days are excluded.
+- **Broker EV**: Raw next-day expected value estimated from qualifying Sectors broker-summary observations — days with positive buy value or buy lots, and at least one broker accumulating net value. Accumulation is judged per broker: the market is closed, so every session's broker values sum to zero overall. Days where no broker accumulates, and zero-buy days, are excluded.
 
 - **Signal score**: The product of momentum and broker EV; candidates are ranked by this value.
 - **Daily market brief**: The post-market Markdown/JSON report sent to Telegram.
