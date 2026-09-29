@@ -112,6 +112,30 @@ def test_qualifies_buy_activity_treats_null_rows_as_no_activity():
         )
 
 
+def test_qualifies_buy_activity_detects_accumulation_in_a_balanced_session():
+    """Net accumulation is per-broker: a closed session sums to zero overall.
+
+    Every real session balances (each buy has a seller), so summing ``nval``
+    across brokers yields exactly zero and a summed ``net_value > 0`` test can
+    never pass. Observed across all 1,755 cached symbol-days, none qualified
+    under the summed rule, which silently produced zero candidates. The day
+    qualifies when at least one broker is accumulating.
+    """
+    from kim_sectors.strategy.signal import _qualifies_buy_activity
+
+    day = date(2026, 8, 3)
+    accumulating = {"broker_code": "AF", "bfreq": 4, "blot": 900, "bval": 3_000_000, "nval": 1_500_000}
+    distributing = {"broker_code": "BB", "bfreq": 9, "blot": 2_000, "bval": 5_000_000, "nval": -1_500_000}
+    # The day's nval totals to exactly zero, as every real session does.
+    assert accumulating["nval"] + distributing["nval"] == 0
+
+    assert _qualifies_buy_activity([accumulating, distributing], symbol="BBCA", day=day) is True
+    # A balanced session where nobody accumulates does not qualify.
+    distributing_only = dict(distributing, nval=-1_000_000, broker_code="CC")
+    selling_peer = dict(accumulating, nval=-1_000_000, broker_code="DD")
+    assert _qualifies_buy_activity([distributing_only, selling_peer], symbol="BBCA", day=day) is False
+
+
 def test_load_broker_dates_raises_contextual_cache_error_for_malformed_summary(monkeypatch, tmp_path):
     from kim_sectors.market_data.errors import CacheError
     from kim_sectors.strategy.signal import _load_broker_dates

@@ -25,17 +25,24 @@ def _qualifies_buy_activity(
 ) -> bool:
     """Return whether a broker day has buying and net accumulation.
 
-    Broker EV observations require positive buy value or buy lots *and*
-    positive net value. Invalid summary numbers are cache-data errors, not
-    non-qualifying observations, so callers can report them explicitly.
+    A day qualifies when total buy value or buy lots is positive *and* at least
+    one individual broker is net accumulating (``nval > 0``).
 
-    A null activity field means Sectors reported no trades for that broker on
-    that day, so it contributes zero. This occurs on thin sessions where most
-    broker rows come back null alongside a populated aggregate row.
+    Net accumulation must be tested per broker, not on the day's total. The
+    market is closed, so across all brokers every buy is matched by a sell and
+    the summed ``nval`` is exactly zero on every session — verified across all
+    1,755 cached symbol-days. Summing therefore made the rule unsatisfiable and
+    silently produced zero candidates. Accumulation is a per-broker property.
+
+    Invalid summary numbers are cache-data errors, not non-qualifying
+    observations, so callers can report them explicitly. A null activity field
+    means Sectors reported no trades for that broker that day, so it
+    contributes zero; this occurs on thin sessions where most broker rows come
+    back null alongside a populated aggregate row.
     """
     buy_value = Decimal("0")
     buy_lots = 0
-    net_value = Decimal("0")
+    accumulating = False
     for index, row in enumerate(summary):
         if not isinstance(row, dict):
             raise CacheError(
@@ -45,13 +52,13 @@ def _qualifies_buy_activity(
         try:
             buy_value += _activity_value(row["bval"])
             buy_lots += _activity_int(row["blot"])
-            net_value += _activity_value(row["nval"])
+            accumulating = accumulating or _activity_value(row["nval"]) > 0
         except (KeyError, InvalidOperation, ValueError, TypeError, ArithmeticError) as error:
             raise CacheError(
                 f"Cached broker row for {symbol} on {day} has malformed summary row "
                 f"{index}: {error}"
             ) from error
-    return (buy_value > 0 or buy_lots > 0) and net_value > 0
+    return (buy_value > 0 or buy_lots > 0) and accumulating
 
 
 def _activity_value(value: object) -> Decimal:
