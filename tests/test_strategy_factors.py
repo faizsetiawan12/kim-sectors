@@ -84,6 +84,34 @@ def test_qualifies_buy_activity_raises_contextual_cache_error():
     assert "Cached broker row for BBCA on 2026-08-10 has malformed summary row 0" in str(exc_bad_num.value)
 
 
+def test_qualifies_buy_activity_treats_null_rows_as_no_activity():
+    """Thin sessions return most broker rows null beside a populated aggregate.
+
+    Observed live on BMRI 2026-07-29: a real trading day where 23 of 24 rows
+    had every activity field null. Null means "no reported trades for that
+    broker", so it must aggregate as zero instead of raising a cache error.
+    """
+    from kim_sectors.strategy.signal import _qualifies_buy_activity
+
+    day = date(2026, 7, 29)
+    null_row = {"broker_code": "AF", "bfreq": None, "blot": None, "bval": None, "nval": None}
+    aggregate = {
+        "broker_code": "--", "bfreq": 28806, "blot": 1251473,
+        "bval": 512675102000, "nval": 120000,
+    }
+
+    # Nulls contribute nothing, so the aggregate row alone decides the day.
+    assert _qualifies_buy_activity([null_row, aggregate], symbol="BMRI", day=day) is True
+    # An all-null day carries no buy activity.
+    assert _qualifies_buy_activity([null_row, null_row], symbol="BMRI", day=day) is False
+    # A null-only day must not mask a genuine malformed value elsewhere.
+    from kim_sectors.market_data.errors import CacheError
+    with pytest.raises(CacheError):
+        _qualifies_buy_activity(
+            [null_row, {"bval": "invalid", "blot": 1, "nval": "10"}], symbol="BMRI", day=day
+        )
+
+
 def test_load_broker_dates_raises_contextual_cache_error_for_malformed_summary(monkeypatch, tmp_path):
     from kim_sectors.market_data.errors import CacheError
     from kim_sectors.strategy.signal import _load_broker_dates

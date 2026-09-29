@@ -35,17 +35,21 @@ class BrokerSummaryRow(StrictModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    # Activity fields are nullable: on thin or partially reported sessions
+    # Sectors returns a broker row with nulls instead of omitting the broker.
+    # Null means "no reported activity for this broker that day" and is
+    # aggregated as zero by the strategy; it is not a schema violation.
     broker_code: str
-    bfreq: int
-    blot: int
-    bval: Decimal
+    bfreq: int | None
+    blot: int | None
+    bval: Decimal | None
     bavg_per_share: Decimal | None
-    sfreq: int
-    slot: int
-    sval: Decimal
+    sfreq: int | None
+    slot: int | None
+    sval: Decimal | None
     savg_per_share: Decimal | None
-    nlot: int
-    nval: Decimal
+    nlot: int | None
+    nval: Decimal | None
     navg_per_share: Decimal | None
 
 

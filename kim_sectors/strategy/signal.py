@@ -28,6 +28,10 @@ def _qualifies_buy_activity(
     Broker EV observations require positive buy value or buy lots *and*
     positive net value. Invalid summary numbers are cache-data errors, not
     non-qualifying observations, so callers can report them explicitly.
+
+    A null activity field means Sectors reported no trades for that broker on
+    that day, so it contributes zero. This occurs on thin sessions where most
+    broker rows come back null alongside a populated aggregate row.
     """
     buy_value = Decimal("0")
     buy_lots = 0
@@ -39,15 +43,29 @@ def _qualifies_buy_activity(
                 f"{index}: expected dict, got {type(row).__name__}"
             )
         try:
-            buy_value += Decimal(str(row["bval"]))
-            buy_lots += int(row["blot"])
-            net_value += Decimal(str(row["nval"]))
+            buy_value += _activity_value(row["bval"])
+            buy_lots += _activity_int(row["blot"])
+            net_value += _activity_value(row["nval"])
         except (KeyError, InvalidOperation, ValueError, TypeError, ArithmeticError) as error:
             raise CacheError(
                 f"Cached broker row for {symbol} on {day} has malformed summary row "
                 f"{index}: {error}"
             ) from error
     return (buy_value > 0 or buy_lots > 0) and net_value > 0
+
+
+def _activity_value(value: object) -> Decimal:
+    """Coerce one broker activity value, mapping null to zero."""
+    if value is None:
+        return Decimal("0")
+    return Decimal(str(value))
+
+
+def _activity_int(value: object) -> int:
+    """Coerce one broker activity count, mapping null to zero."""
+    if value is None:
+        return 0
+    return int(value)
 
 
 def _load_broker_dates(symbol: str, cache_dir: Path, market_date: date) -> set[date]:
