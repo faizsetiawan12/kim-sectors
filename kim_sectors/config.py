@@ -39,6 +39,23 @@ class SectorsConfig(BaseSettings):
             raise ValueError("SECTORS_API_KEY is not set")
         return value
 
+    @field_validator("telegram_bot_token", "telegram_chat_id", mode="before")
+    @classmethod
+    def blank_to_none(cls, value: object) -> object:
+        """Treat blank optional values as unset.
+
+        ``.env.example`` ships these keys empty; an empty string is not a
+        valid ``int``/``SecretStr``, so leaving the template as-is would fail
+        validation on a fresh checkout.
+        """
+        return None if isinstance(value, str) and not value.strip() else value
+
+    @field_validator("telegram_message_thread_id", mode="before")
+    @classmethod
+    def blank_thread_to_none(cls, value: object) -> object:
+        """Apply the same blank-is-unset rule to the integer thread id."""
+        return cls.blank_to_none(value)
+
     @property
     def api_key(self) -> str:
         """Return the key only at the HTTP boundary."""

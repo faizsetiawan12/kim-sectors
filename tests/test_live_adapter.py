@@ -13,6 +13,7 @@ from kim_sectors.market_data import (
     SectorsSchemaError,
     build_authorization_headers,
 )
+from kim_sectors.market_data.live import MAX_RATE_LIMIT_RETRIES
 
 from .support import daily_bars_payload, universe_screener_payload
 
@@ -75,12 +76,51 @@ def test_live_adapter_maps_auth_status(status_code):
         adapter.fetch_daily_bars("BBCA", date(2026, 8, 26), date(2026, 8, 26))
 
 
-@pytest.mark.parametrize("status_code", [400, 429, 500])
+@pytest.mark.parametrize("status_code", [400, 500])
 def test_live_adapter_maps_request_status(status_code):
     adapter = SectorsHttpAdapter(config(), session=FakeSession(FakeResponse(status_code)))
 
     with pytest.raises(SectorsRequestError):
         adapter.fetch_daily_bars("BBCA", date(2026, 8, 26), date(2026, 8, 26))
+
+
+def test_live_adapter_retries_rate_limit_then_succeeds(monkeypatch):
+    """A 429 followed by a 200 resolves normally instead of aborting the sync."""
+    monkeypatch.setattr("kim_sectors.market_data.live.time.sleep", lambda _s: None)
+
+    class ThrottledOnceSession(FakeSession):
+        def __init__(self, throttled, ok):
+            super().__init__(ok)
+            self.throttled = throttled
+            self.served_throttle = False
+
+        def get(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            if not self.served_throttle:
+                self.served_throttle = True
+                return self.throttled
+            return self.response
+
+    session = ThrottledOnceSession(
+        FakeResponse(429),
+        FakeResponse(200, daily_bars_payload(start=date(2026, 8, 26), end=date(2026, 8, 26))),
+    )
+    adapter = SectorsHttpAdapter(config(), session=session)
+
+    bars = adapter.fetch_daily_bars("BBCA", date(2026, 8, 26), date(2026, 8, 26))
+    assert len(bars) == 1
+    assert len(session.calls) == 2
+
+
+def test_live_adapter_gives_up_after_bounded_rate_limit_retries(monkeypatch):
+    """Persistent 429 still fails, but only after the bounded retry count."""
+    monkeypatch.setattr("kim_sectors.market_data.live.time.sleep", lambda _s: None)
+    session = FakeSession(FakeResponse(429))
+    adapter = SectorsHttpAdapter(config(), session=session)
+
+    with pytest.raises(SectorsRequestError, match="429"):
+        adapter.fetch_daily_bars("BBCA", date(2026, 8, 26), date(2026, 8, 26))
+    assert len(session.calls) == MAX_RATE_LIMIT_RETRIES + 1
 
 
 def test_live_adapter_maps_transport_failure():

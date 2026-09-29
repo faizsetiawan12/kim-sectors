@@ -86,7 +86,9 @@ def test_sync_cache_first_fetch_persists_provenance_and_reports_cost(monkeypatch
         "source": "sectors",
     }
     assert daily["rows"][0]["symbol"] == "BBCA"
-    assert json.loads(universe_path.read_text())[0]["effective_date"] == "2026-09-02"
+    # Membership is dated from the start of the synchronized window, not from
+    # `today`, so a historical --market-date resolves against this snapshot.
+    assert json.loads(universe_path.read_text())[0]["effective_date"] == "2026-08-01"
     complete = [json.loads(line) for line in output.getvalue().splitlines()][-1]
     assert complete["credits_spent"] == 3
 

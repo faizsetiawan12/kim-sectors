@@ -226,7 +226,14 @@ def sync_cache(
                 index=index,
                 cache_dir=cache_dir,
                 timezone=timezone,
-                effective_date=today,
+                # The resolved list is asserted to hold across the window being
+                # synchronized. Stamping it with `today` would make every
+                # historical replay fail, because no snapshot would be effective
+                # on or before an earlier --market-date. Sectors returns the
+                # current index membership, so a backdated fetch carries the same
+                # approximation either way; dating it from the window start keeps
+                # the cache self-consistent and is documented as such.
+                effective_date=min(start, today),
                 logger=logger,
             )
             universe_credits = membership.pages

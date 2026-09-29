@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from datetime import date
 from typing import Any, Mapping
 
@@ -16,6 +17,14 @@ from .validate import parse_broker_summary, parse_daily_bars
 
 DEFAULT_TIMEOUT_SECONDS = 30
 
+# Rate-limit backoff. Sectors returns 429 on bursts; a full LQ45 sync issues one
+# request per symbol per data type, so a bounded retry-and-wait keeps a long
+# fetch alive instead of aborting mid-way. The attempt cap keeps the CLI
+# bounded rather than retrying forever.
+MAX_RATE_LIMIT_RETRIES = 5
+RATE_LIMIT_BASE_DELAY_SECONDS = 2.0
+RATE_LIMIT_MAX_DELAY_SECONDS = 30.0
+
 UNIVERSE_INDEX_QUERY = "indices in ['{index}']"
 UNIVERSE_PAGE_LIMIT = 30
 UNIVERSE_ENDPOINT = "companies/"
@@ -28,6 +37,18 @@ _SYMBOL_PATTERN = re.compile(r"^[A-Z]{4}(?:\.JK)?$", re.IGNORECASE)
 def build_authorization_headers(api_key: str) -> dict[str, str]:
     """Build Sectors' raw API-key header (not a Bearer token)."""
     return {"Authorization": api_key}
+
+
+def _retry_delay(attempt: int, response: requests.Response) -> float:
+    """Exponential backoff, honouring ``Retry-After`` when Sectors sends it."""
+    retry_after = getattr(response, "headers", {}).get("Retry-After")
+    if retry_after:
+        try:
+            return min(float(retry_after), RATE_LIMIT_MAX_DELAY_SECONDS)
+        except ValueError:
+            pass
+    delay = RATE_LIMIT_BASE_DELAY_SECONDS * (2**attempt)
+    return min(delay, RATE_LIMIT_MAX_DELAY_SECONDS)
 
 
 def normalize_symbol(value: Any) -> str:
@@ -121,23 +142,40 @@ class SectorsHttpAdapter:
         )
 
     def _get(self, endpoint: str, *, params: Mapping[str, Any]) -> Any:
+        """GET with bounded retry on rate limits.
+
+        Sectors throttles bursts (HTTP 429). A full ``sync-cache --fetch`` issues
+        one request per symbol per data type, so a multi-symbol run reliably
+        trips the limit partway through. Backing off and resuming is correct
+        here because the cache records provenance: a retry re-fetches a chunk
+        that was never stored, so no credit is spent twice.
+        """
         url = self._base_url + endpoint
-        try:
-            response = self._session.get(
-                url,
-                headers=self._headers,
-                params=params,
-                timeout=DEFAULT_TIMEOUT_SECONDS,
-            )
-        except requests.RequestException as error:
-            raise SectorsRequestError(f"Sectors request failed: {error}") from error
+        for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+            try:
+                response = self._session.get(
+                    url,
+                    headers=self._headers,
+                    params=params,
+                    timeout=DEFAULT_TIMEOUT_SECONDS,
+                )
+            except requests.RequestException as error:
+                raise SectorsRequestError(f"Sectors request failed: {error}") from error
+
+            if response.status_code == 429 and attempt < MAX_RATE_LIMIT_RETRIES:
+                time.sleep(_retry_delay(attempt, response))
+                continue
+            break
 
         if response.status_code in (401, 403):
             raise SectorsAuthError(
                 f"Sectors rejected the API key (HTTP {response.status_code})"
             )
         if response.status_code == 429:
-            raise SectorsRequestError("Sectors rate limit exceeded (HTTP 429)")
+            raise SectorsRequestError(
+                f"Sectors rate limit exceeded (HTTP 429) after "
+                f"{MAX_RATE_LIMIT_RETRIES} retries"
+            )
         if not 200 <= response.status_code < 300:
             raise SectorsRequestError(
                 f"Sectors request failed (HTTP {response.status_code})"

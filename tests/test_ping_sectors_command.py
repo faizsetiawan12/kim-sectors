@@ -133,7 +133,10 @@ def test_ping_sectors_handles_invalid_timezone(monkeypatch):
     assert "Traceback" not in err.getvalue()
 
 
-def test_ping_sectors_requires_api_key(monkeypatch):
+def test_ping_sectors_requires_api_key(monkeypatch, tmp_path):
+    # SectorsConfig reads `.env` by relative path, so chdir away to prove the
+    # missing-key path is reached rather than loading a local key file.
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("SECTORS_API_KEY", raising=False)
     out = StringIO()
     err = StringIO()

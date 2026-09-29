@@ -24,6 +24,17 @@ class DailyBar(StrictModel):
 
 
 class BrokerSummaryRow(StrictModel):
+    """One broker's activity for one day.
+
+    ``extra="ignore"`` rather than the default forbid: Sectors returns extra
+    foreign-broker (``f_*``) and derived (``d_*``) columns that this strategy
+    does not read, and the vendor adds fields without notice. Every field used
+    below stays required, so a rename or removal of a field we depend on is
+    still rejected at validation.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
     broker_code: str
     bfreq: int
     blot: int

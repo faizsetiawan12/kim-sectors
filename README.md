@@ -110,6 +110,12 @@ Exit codes: `0` success, `2` authentication failure (including a missing
 `SECTORS_API_KEY`), `3` malformed response schema, `4` request failure
 (timeout, rate limit, other HTTP errors), `1` unexpected error.
 
+Rate limits (HTTP 429) are retried with bounded exponential backoff that honours
+`Retry-After`, up to 5 attempts per request. A long `sync-cache --fetch` issues
+one request per symbol per data type and will normally hit the limit at least
+once; resuming is safe because only successfully stored chunks count as covered,
+so a retried chunk is never paid for twice.
+
 ### `sync-cache`
 
 Synchronize the LQ45 universe and reusable Sectors data cache. A command without

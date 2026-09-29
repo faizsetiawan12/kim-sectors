@@ -29,8 +29,14 @@ ALL_COMMANDS = [
 
 
 @pytest.mark.parametrize("argv", ALL_COMMANDS, ids=lambda argv: argv[0])
-def test_all_commands_map_missing_credentials_to_auth_exit_code(monkeypatch, argv):
+def test_all_commands_map_missing_credentials_to_auth_exit_code(
+    monkeypatch, argv, tmp_path
+):
     """Every public command preserves exit code 2 for missing Sectors credentials."""
+    # chdir away from the repo so a real local `.env` cannot supply the key:
+    # SectorsConfig reads `.env` by relative path, and env vars alone do not
+    # mask it. tmp_path also isolates cache/output writes for these commands.
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("SECTORS_API_KEY", raising=False)
     error = StringIO()
 
