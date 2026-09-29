@@ -8,7 +8,7 @@ operator at the explicit cache-sync operation.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from logging import Logger
 from pathlib import Path
 
@@ -16,6 +16,62 @@ from ..market_data.cache import merge_spans, missing_spans, read_cache
 from ..market_data.models import DateSpan
 from ..observability import log_stage
 from .models import CoverageReport, SymbolCoverage
+
+
+def _observed_trading_days(
+    symbols: list[str], data_type: str, cache_dir: Path
+) -> set[date]:
+    """Return every date any cached symbol has a row for.
+
+    The cache is the authority on which calendar days traded. A window
+    containing only IDX holidays and weekends has no rows for *any* symbol, so
+    it is not a coverage gap.
+    """
+    observed: set[date] = set()
+    for symbol in symbols:
+        rows, _ = read_cache(symbol, data_type, cache_dir)
+        for row in rows:
+            try:
+                observed.add(date.fromisoformat(str(row.get("date"))))
+            except (ValueError, TypeError):
+                continue
+    return observed
+
+
+def _trading_gaps(
+    gaps: list[DateSpan], observed: set[date]
+) -> list[DateSpan]:
+    """Keep only gaps that contain at least one day the market actually traded.
+
+    ``missing_spans`` compares calendar dates, so a holiday between two
+    trading days looks like a hole in the cache. Restricting a gap to days
+    observed for at least one symbol separates "the market was closed" from
+    "this symbol's history is incomplete", which is the distinction that
+    matters: the first is expected, the second must block the run.
+    """
+    real: list[DateSpan] = []
+    for gap in gaps:
+        if not observed:
+            # No reference calendar available; keep the gap so a genuinely
+            # empty cache is still reported rather than silently accepted.
+            real.append(gap)
+            continue
+        cursor = gap.start
+        span_start: date | None = None
+        last_hit: date | None = None
+        while cursor <= gap.end:
+            if cursor in observed:
+                if span_start is None:
+                    span_start = cursor
+                last_hit = cursor
+            elif span_start is not None and last_hit is not None:
+                real.append(DateSpan(start=span_start, end=last_hit))
+                span_start = None
+                last_hit = None
+            cursor += timedelta(days=1)
+        if span_start is not None and last_hit is not None:
+            real.append(DateSpan(start=span_start, end=last_hit))
+    return real
 
 
 def check_coverage(
@@ -36,8 +92,13 @@ def check_coverage(
     requiring data before a symbol joins or after it leaves the universe while
     still reporting every missing active span. The default checks the full
     replay window for callers without membership history.
+
+    Gaps are judged against dates the market actually traded, so IDX holidays
+    are not mistaken for missing history.
     """
     requested = DateSpan(start=start, end=end)
+    daily_observed = _observed_trading_days(symbols, "daily", cache_dir)
+    broker_observed = _observed_trading_days(symbols, "broker", cache_dir)
     symbol_reports: list[SymbolCoverage] = []
     missing_symbols = 0
     for symbol in symbols:
@@ -57,16 +118,22 @@ def check_coverage(
             if windows is not None
             else [requested]
         )
-        daily_missing = [
-            missing
-            for window in d_req
-            for missing in missing_spans(window, daily_spans)
-        ]
-        broker_missing = [
-            missing
-            for window in b_req
-            for missing in missing_spans(window, broker_spans)
-        ]
+        daily_missing = _trading_gaps(
+            [
+                missing
+                for window in d_req
+                for missing in missing_spans(window, daily_spans)
+            ],
+            daily_observed,
+        )
+        broker_missing = _trading_gaps(
+            [
+                missing
+                for window in b_req
+                for missing in missing_spans(window, broker_spans)
+            ],
+            broker_observed,
+        )
         symbol_reports.append(
             SymbolCoverage(
                 symbol=symbol,

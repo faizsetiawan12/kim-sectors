@@ -163,6 +163,75 @@ def test_backtest_reports_incomplete_coverage_before_calculating(monkeypatch, tm
     assert not list((tmp_path / "reports").glob("backtest_*.json"))
 
 
+def test_backtest_treats_idx_holidays_as_covered_not_missing(monkeypatch, tmp_path):
+    """A window spanning an IDX holiday is not a coverage gap.
+
+    ``missing_spans`` compares calendar dates, so a market holiday between two
+    trading days reads as a hole. Observed live: the 2026-05-15 to 2026-08-07
+    window contains six holidays (Labour Day, Ascension, Eid, Pancasila) and
+    the run refused to start, reporting all 45 symbols as missing.
+
+    Coverage now judges gaps against dates the market actually traded. A real
+    hole, where the market traded and this symbol has no row, must still block.
+    """
+    cache_dir = tmp_path / "cache"
+    seed_universe(cache_dir, ["BBCA", "TLKM"], date(2026, 8, 1))
+    # seed_win_loss_history records a 08-03..08-12 span while storing only the
+    # trading days it returns, so the 08-08/09 weekend and any unreturned
+    # weekday sit inside the span without a row. Replaying 08-06..08-10 spans
+    # exactly that situation.
+    for symbol in ("BBCA", "TLKM"):
+        seed_win_loss_history(cache_dir, symbol)
+
+    result, output, error = run_backtest(
+        monkeypatch, tmp_path,
+        "--start", "2026-08-06", "--end", "2026-08-10",
+        "--lookback", "1", "--min-samples", "1",
+        "--top-k", "1", "--rebalance-sessions", "1",
+    )
+
+    assert result == 0, error.getvalue()
+    report = load_artifact(tmp_path)
+    assert report["coverage"]["status"] == "ok"
+    assert report["coverage"]["symbols"] == [
+        {"symbol": "BBCA", "daily_missing": [], "broker_missing": []},
+        {"symbol": "TLKM", "daily_missing": [], "broker_missing": []},
+    ]
+
+def test_backtest_still_blocks_on_a_genuine_mid_window_hole(monkeypatch, tmp_path):
+    """The holiday allowance must not mask real missing history.
+
+    Here the market traded on 2026-08-10 (BBCA has a row) but TLKM does not, so
+    TLKM's own cache leaves a one-session hole that must block the run.
+    """
+    cache_dir = tmp_path / "cache"
+    seed_universe(cache_dir, ["BBCA", "TLKM"], date(2026, 8, 1))
+    # BBCA has rows through 08-12; TLKM stops after 08-07, so 08-10 is a day
+    # the market traded (BBCA proves it) that TLKM never recorded.
+    seed_win_loss_history(cache_dir, "BBCA")
+    seed_daily(
+        cache_dir, "TLKM",
+        [(date(2026, 8, 3), "50"), (date(2026, 8, 4), "55"), (date(2026, 8, 5), "49"),
+         (date(2026, 8, 6), "54"), (date(2026, 8, 7), "49")],
+        span=DateSpan(start=date(2026, 8, 3), end=date(2026, 8, 7)),
+    )
+    seed_broker(
+        cache_dir, "TLKM",
+        [date(2026, 8, 3), date(2026, 8, 4), date(2026, 8, 5), date(2026, 8, 6), date(2026, 8, 7)],
+        span=DateSpan(start=date(2026, 8, 3), end=date(2026, 8, 7)),
+    )
+
+    result, output, error = run_backtest(
+        monkeypatch, tmp_path,
+        "--start", "2026-08-06", "--end", "2026-08-10",
+        "--lookback", "1", "--min-samples", "1",
+        "--top-k", "1", "--rebalance-sessions", "1",
+    )
+
+    assert result == 1
+    assert "coverage incomplete" in error.getvalue()
+    assert "TLKM" in error.getvalue()
+
 def test_backtest_tracer_enters_next_session_and_metrics(monkeypatch, tmp_path):
     # One symbol, one rebalance per session, zero costs. Signal on 08-10
     # (EV 0.2, momentum +0.10) enters at the NEXT session close on 08-11
