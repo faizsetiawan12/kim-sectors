@@ -38,10 +38,10 @@ END = date(2026, 8, 7)
 COST_BPS = 10
 SLIPPAGE_BPS = 5
 
-LOOKBACKS = [5, 10, 15, 21, 30, 40]
-MIN_SAMPLES = [3, 5, 8]
-TOP_K = [1, 2, 3, 5, 8, 10]
-REBALANCE = [1, 2, 3, 5]
+LOOKBACKS = [5, 10, 21, 30, 40]
+MIN_SAMPLES = [5]
+TOP_K = [1, 3, 5, 10]
+REBALANCE = [1, 2, 5, 10]
 
 _SILENT = configure_logging(io.StringIO(), _tz.utc, event="sweep", name="sweep")
 

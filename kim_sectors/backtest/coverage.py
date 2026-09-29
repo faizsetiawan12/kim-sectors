@@ -18,24 +18,15 @@ from ..observability import log_stage
 from .models import CoverageReport, SymbolCoverage
 
 
-def _observed_trading_days(
-    symbols: list[str], data_type: str, cache_dir: Path
-) -> set[date]:
-    """Return every date any cached symbol has a row for.
-
-    The cache is the authority on which calendar days traded. A window
-    containing only IDX holidays and weekends has no rows for *any* symbol, so
-    it is not a coverage gap.
-    """
-    observed: set[date] = set()
-    for symbol in symbols:
-        rows, _ = read_cache(symbol, data_type, cache_dir)
-        for row in rows:
-            try:
-                observed.add(date.fromisoformat(str(row.get("date"))))
-            except (ValueError, TypeError):
-                continue
-    return observed
+def _row_dates(rows: list[dict]) -> set[date]:
+    """Return the parseable dates present in cached rows."""
+    dates: set[date] = set()
+    for row in rows:
+        try:
+            dates.add(date.fromisoformat(str(row.get("date"))))
+        except (ValueError, TypeError):
+            continue
+    return dates
 
 
 def _trading_gaps(
@@ -97,13 +88,25 @@ def check_coverage(
     are not mistaken for missing history.
     """
     requested = DateSpan(start=start, end=end)
-    daily_observed = _observed_trading_days(symbols, "daily", cache_dir)
-    broker_observed = _observed_trading_days(symbols, "broker", cache_dir)
+    # One read per symbol and data type, reused for both the per-symbol spans
+    # and the cross-symbol trading calendar. The calendar is the union of every
+    # cached date: the cache is the authority on which days actually traded, so
+    # a window with no rows for any symbol is a closed market, not missing
+    # history.
+    cached: dict[str, tuple[list[DateSpan], list[DateSpan]]] = {}
+    daily_observed: set[date] = set()
+    broker_observed: set[date] = set()
+    for symbol in symbols:
+        daily_rows, daily_spans = read_cache(symbol, "daily", cache_dir)
+        broker_rows, broker_spans = read_cache(symbol, "broker", cache_dir)
+        daily_observed |= _row_dates(daily_rows)
+        broker_observed |= _row_dates(broker_rows)
+        cached[symbol] = (daily_spans, broker_spans)
+
     symbol_reports: list[SymbolCoverage] = []
     missing_symbols = 0
     for symbol in symbols:
-        _, daily_spans = read_cache(symbol, "daily", cache_dir)
-        _, broker_spans = read_cache(symbol, "broker", cache_dir)
+        daily_spans, broker_spans = cached[symbol]
         d_req = (
             merge_spans(daily_windows.get(symbol, []))
             if daily_windows is not None
