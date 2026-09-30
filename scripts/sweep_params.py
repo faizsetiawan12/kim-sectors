@@ -16,8 +16,10 @@ from __future__ import annotations
 import io
 import itertools
 import json
+import os
 import statistics
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from datetime import date, timezone as _tz
 from pathlib import Path
 
@@ -82,18 +84,22 @@ def run(lookback: int, samples: int, top_k: int, rebal: int) -> dict | None:
     }
 
 
+def _run_combo(combo: tuple[int, int, int, int]) -> dict | None:
+    """Worker entry point: evaluate one combination. Must be top-level to pickle."""
+    return run(*combo)
+
+
 def main() -> int:
     ensure_dirs(cache_dir=CACHE, output_dir=OUT)
-    rows = [
-        row
-        for row in (
-            run(lb, ms, k, rb)
-            for lb, ms, k, rb in itertools.product(
-                LOOKBACKS, MIN_SAMPLES, TOP_K, REBALANCE
-            )
-        )
-        if row is not None
-    ]
+    combos = list(itertools.product(LOOKBACKS, MIN_SAMPLES, TOP_K, REBALANCE))
+    # Each replay is CPU-bound and independent, so spread the grid across
+    # cores. A 64-day window costs roughly 10s per combination, which is 13
+    # minutes serially.
+    workers = max(1, min(len(combos), (os.cpu_count() or 2) - 1))
+    print(f"evaluating {len(combos)} combinations across {workers} workers")
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        results = pool.map(_run_combo, combos)
+    rows = [row for row in results if row is not None]
     if not rows:
         print("no combination could be evaluated; check cache coverage")
         return 1
