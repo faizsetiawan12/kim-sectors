@@ -67,21 +67,30 @@ def _benchmark_comparison(
 ) -> BenchmarkComparison | None:
     """Equal-weight buy-and-hold benchmark from cached closes.
 
-    Only symbols with positive closes at both window endpoints are included;
-    when none qualify the benchmark is omitted (``None``) rather than guessed.
+    Anchors to the first and last sessions in which the market actually traded.
+    The requested ``start``/``end`` are calendar bounds and frequently land on a
+    weekend or IDX holiday; anchoring to a date no symbol traded left every
+    symbol ineligible and silently dropped the benchmark entirely.
+
+    Only symbols with positive closes at both anchors are included; when none
+    qualify the benchmark is omitted (``None``) rather than guessed.
     """
+    anchor_start = min((s for s in sessions if s >= start), default=None)
+    anchor_end = max((s for s in sessions if s <= end), default=None)
+    if anchor_start is None or anchor_end is None or anchor_start == anchor_end:
+        return None
     eligible = [
         symbol
         for symbol in symbols
-        if start in prices.get(symbol, {})
-        and end in prices.get(symbol, {})
-        and prices[symbol][start] > 0
-        and prices[symbol][end] > 0
+        if anchor_start in prices.get(symbol, {})
+        and anchor_end in prices.get(symbol, {})
+        and prices[symbol][anchor_start] > 0
+        and prices[symbol][anchor_end] > 0
     ]
     if not eligible:
         return None
     returns = {
-        symbol: float(prices[symbol][end]) / float(prices[symbol][start]) - 1.0
+        symbol: float(prices[symbol][anchor_end]) / float(prices[symbol][anchor_start]) - 1.0
         for symbol in eligible
     }
     total_return = sum(returns.values()) / len(returns)
@@ -93,7 +102,7 @@ def _benchmark_comparison(
             if available:
                 last = max(available)
                 session_returns.append(
-                    float(prices[symbol][last]) / float(prices[symbol][start]) - 1.0
+                    float(prices[symbol][last]) / float(prices[symbol][anchor_start]) - 1.0
                 )
         if session_returns:
             curve.append(

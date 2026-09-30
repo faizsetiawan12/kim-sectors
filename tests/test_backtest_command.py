@@ -319,6 +319,35 @@ def test_backtest_tracer_enters_next_session_and_metrics(monkeypatch, tmp_path):
     assert "equal-weight buy-and-hold" in benchmark["label"]
     assert "1/1" in benchmark["note"]
 
+def test_backtest_benchmark_anchors_to_sessions_that_traded(monkeypatch, tmp_path):
+    """A window starting on a non-trading day still produces a benchmark.
+
+    The requested --start is a calendar bound. When it falls on a weekend or IDX
+    holiday no symbol has a close that day, so anchoring the benchmark to the
+    requested endpoints left every symbol ineligible and dropped the comparison
+    entirely. Observed live: 2026-05-01 was Labour Day and all 80 sweep rows
+    reported a null benchmark.
+    """
+    cache_dir = tmp_path / "cache"
+    seed_universe(cache_dir, ["BBCA"], date(2026, 8, 1))
+    seed_win_loss_history(cache_dir, "BBCA")
+
+    # 2026-08-08 is a Saturday: the market does not trade.
+    result, output, error = run_backtest(
+        monkeypatch, tmp_path,
+        "--start", "2026-08-08", "--end", "2026-08-12",
+        "--lookback", "1", "--min-samples", "1",
+        "--top-k", "1", "--rebalance-sessions", "1",
+    )
+
+    assert result == 0, error.getvalue()
+    report = load_artifact(tmp_path)
+    benchmark = report["benchmark"]
+    assert benchmark is not None, "benchmark must survive a non-trading start date"
+    # Anchored to 08-10 (first session traded) and 08-12 (last).
+    assert benchmark["equity_curve"][0]["date"] == "2026-08-10"
+    assert benchmark["equity_curve"][-1]["date"] == "2026-08-12"
+
 
 def test_backtest_selects_top_k_and_breaks_ties_by_symbol(monkeypatch, tmp_path):
     cache_dir = tmp_path / "cache"
