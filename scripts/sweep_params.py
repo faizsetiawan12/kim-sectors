@@ -19,7 +19,7 @@ import json
 import os
 import statistics
 import sys
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import date, timezone as _tz
 from pathlib import Path
 
@@ -89,6 +89,12 @@ def _run_combo(combo: tuple[int, int, int, int]) -> dict | None:
     return run(*combo)
 
 
+def _save(rows: list[dict]) -> None:
+    """Checkpoint results so an interrupted run keeps completed work."""
+    OUT.mkdir(parents=True, exist_ok=True)
+    (OUT / "results.json").write_text(json.dumps(rows, indent=2))
+
+
 def main() -> int:
     ensure_dirs(cache_dir=CACHE, output_dir=OUT)
     combos = list(itertools.product(LOOKBACKS, MIN_SAMPLES, TOP_K, REBALANCE))
@@ -96,17 +102,28 @@ def main() -> int:
     # cores. A 64-day window costs roughly 10s per combination, which is 13
     # minutes serially.
     workers = max(1, min(len(combos), (os.cpu_count() or 2) - 1))
-    print(f"evaluating {len(combos)} combinations across {workers} workers")
+    print(f"evaluating {len(combos)} combinations across {workers} workers", flush=True)
+
+    # as_completed yields each result as it lands, so every finished
+    # combination is written to disk immediately. An interrupted run then keeps
+    # its completed work instead of losing the whole grid.
+    rows: list[dict] = []
     with ProcessPoolExecutor(max_workers=workers) as pool:
-        results = pool.map(_run_combo, combos)
-    rows = [row for row in results if row is not None]
+        futures = {pool.submit(_run_combo, combo): combo for combo in combos}
+        for future in as_completed(futures):
+            row = future.result()
+            if row is None:
+                continue
+            rows.append(row)
+            _save(rows)
+            print(f"  {len(rows)}/{len(combos)} done", flush=True)
+
     if not rows:
         print("no combination could be evaluated; check cache coverage")
         return 1
 
     rows.sort(key=lambda r: r["total_return"], reverse=True)
-    OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "results.json").write_text(json.dumps(rows, indent=2))
+    _save(rows)
 
     rets = [r["total_return"] for r in rows]
     wins = [r for r in rows if r["total_return"] > 0]
