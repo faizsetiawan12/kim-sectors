@@ -4,7 +4,7 @@ KIM sector analysis and factor research repository.
 
 ## Governance & Entry
 
-- Read `/home/faiz/KIM/AGENTS.md` and `/home/faiz/KIM/agents/PLAYBOOK.md` for shared KIM authority and rules.
+- Read `/home/faiz/KIM/AGENTS.md`, `/home/faiz/KIM/CONTEXT.md` (shared glossary), and `/home/faiz/KIM/agents/PLAYBOOK.md` for shared KIM authority and rules.
 - KIM principals: Faiz, Jimmy, Oscar, Wahyu.
 
 ## Agent Skills & Tracking
