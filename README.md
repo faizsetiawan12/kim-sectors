@@ -94,6 +94,13 @@ Each command emits one JSON object per line with a WIB timestamp and a stage. De
 
 For a clean judging/demo run: configure a local Sectors API key; run the bounded `ping-sectors` tracer; use `sync-cache --start ... --end ... --fetch` only for the historical span needed; run `run-daily` to create the Markdown/JSON brief and optionally deliver Telegram; then run `run-backtest` against the same validated cache. Show the structured logs, report artifacts, formula fields, credit estimate, and the explicit human decision boundary.
 
+## Parameter study
+
+`docs/parameter-study.md` reports a 80-configuration sweep over the cached
+window plus an out-of-sample holdout of the winning configuration. The winner
+returned +78% in-sample and −0.24% on unseen data, so no validated edge is
+claimed. The study and both scripts cost zero API credits.
+
 ## Commands
 
 ### `ping-sectors`
